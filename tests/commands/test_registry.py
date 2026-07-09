@@ -5,7 +5,6 @@ from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import (
     CommandContext,
     RecordingRoller,
-    command,
     execute,
     open_campaign_context,
 )
@@ -13,30 +12,25 @@ from dm_engine.content.lookup import RulesDB
 from dm_engine.state.store import CampaignStore
 
 
-@command("_test_echo")
 def _echo(ctx, **kwargs) -> CommandResult:
     return CommandResult(ok=True, command="_test_echo", digest="echoed", data=kwargs)
 
 
-@command("_test_refuse")
 def _refuse(ctx, **kwargs) -> CommandResult:
     return refuse("_test_refuse", "not allowed")
 
 
-@command("_test_boom")
 def _boom(ctx, **kwargs) -> CommandResult:
     ctx.store.upsert_location("half", "Half", "should roll back", region=None)
     raise RuntimeError("engine bug")
 
 
-@command("_test_roll")
 def _roll(ctx, **kwargs) -> CommandResult:
     r = ctx.roller.roll("2d6", player_value=kwargs.get("player_value"))
     return CommandResult(ok=True, command="_test_roll", digest=f"rolled {r.total}",
                          data={"total": r.total})
 
 
-@command("_test_roll_many_d6")
 def _roll_many_d6(ctx, **kwargs) -> CommandResult:
     # A large batch of non-d20 dice: with high probability at least one draw
     # hits rejection-sampling, so this consumes a different number of
@@ -44,6 +38,26 @@ def _roll_many_d6(ctx, **kwargs) -> CommandResult:
     r = ctx.roller.roll("20d6")
     return CommandResult(ok=True, command="_test_roll_many_d6",
                          digest=f"rolled {r.total}", data={"total": r.total})
+
+
+@pytest.fixture(autouse=True)
+def _register_test_commands():
+    """Register the module's `_test_*` handlers for the duration of each test
+    and remove them afterward. Registering at import time would leave them in
+    the global registry for the whole session, breaking other suites (e.g. the
+    MCP smoke test) that assert the registry's exact command set."""
+    handlers = {
+        "_test_echo": _echo,
+        "_test_refuse": _refuse,
+        "_test_boom": _boom,
+        "_test_roll": _roll,
+        "_test_roll_many_d6": _roll_many_d6,
+    }
+    for name, fn in handlers.items():
+        registry._COMMANDS[name] = fn
+    yield
+    for name in handlers:
+        registry._COMMANDS.pop(name, None)
 
 
 def test_execute_appends_event_and_sets_event_ids(ctx):

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "dm-engine": {
+      "command": "uv",
+      "args": ["run", "dm", "mcp"]
+    }
+  }
+}

@@ -122,6 +122,21 @@ def audit(
         store.close()
 
 
+@app.command("mcp")
+def mcp(
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
+) -> None:
+    """Run the MCP server over stdio (for Claude Code to drive the engine)."""
+    import anyio
+
+    from dm_engine.mcp.server import run_stdio
+
+    anyio.run(run_stdio, campaigns_dir, db)
+
+
 @app.command("cmd")
 def cmd(
     name: str,

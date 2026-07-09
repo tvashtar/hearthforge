@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Rules engine and game state for an AI-driven D&D 5e dungeon master"
 requires-python = ">=3.12"
 dependencies = [
+    "mcp>=1.0",
     "pydantic>=2.7",
     "typer>=0.12",
 ]
@@ -35,6 +36,9 @@ src = ["src", "tests"]
 
 [tool.ruff.lint.per-file-ignores]
 # The frozen binding tests use `;`-joined statements verbatim.
+# The frozen MCP smoke test imports `anyio` verbatim (documents the backend
+# the anyio plugin drives) though it is only referenced via the plugin.
+"tests/integration/test_mcp_smoke.py" = ["F401"]
 "tests/commands/test_combat.py" = ["E702"]
 "tests/commands/test_attacks.py" = ["E701", "E702"]
 "tests/commands/test_spells.py" = ["E702"]

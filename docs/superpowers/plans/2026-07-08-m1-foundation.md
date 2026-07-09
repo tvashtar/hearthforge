@@ -154,10 +154,11 @@ git commit -m "feat: scaffold dm-engine package with CLI"
 """Vendor SRD sources into data/srd/.
 
 Text (rules prose):  copies markdown/ from the sibling dnd-5e-srd fork.
-Structured (typed records): shallow-clones 5e-bits/5e-database and copies
-the 2014 SRD JSON files.
+Structured (typed records): copies the 2014 SRD JSON files from a local
+clone of 5e-bits/5e-database (sibling ../5e-database by default),
+shallow-cloning from GitHub only if no local clone exists.
 
-Usage: uv run python scripts/sync_srd.py [--fork-path ../dnd-5e-srd]
+Usage: uv run python scripts/sync_srd.py [--fork-path ../dnd-5e-srd] [--bits-path ../5e-database]
 """
 
 from __future__ import annotations
@@ -187,28 +188,35 @@ def sync_text(fork_path: Path) -> int:
     return count
 
 
-def sync_structured() -> int:
+def _copy_bits_json(repo: Path) -> int:
+    candidates = sorted(repo.glob("src/**/5e-SRD-*.json"))
+    # Prefer the 2014 SRD dataset if the repo splits by edition.
+    files_2014 = [p for p in candidates if "2014" in p.parts]
+    files = files_2014 or candidates
+    for f in files:
+        shutil.copy2(f, STRUCTURED_DEST / f.name)
+    return len(files)
+
+
+def sync_structured(bits_path: Path) -> int:
     STRUCTURED_DEST.mkdir(parents=True, exist_ok=True)
+    if bits_path.is_dir():
+        return _copy_bits_json(bits_path)
     with tempfile.TemporaryDirectory() as tmp:
         subprocess.run(
             ["git", "clone", "--depth", "1", FIVE_E_BITS_URL, tmp],
             check=True,
         )
-        candidates = sorted(Path(tmp).glob("src/**/5e-SRD-*.json"))
-        # Prefer the 2014 SRD dataset if the repo splits by edition.
-        files_2014 = [p for p in candidates if "2014" in p.parts]
-        files = files_2014 or candidates
-        for f in files:
-            shutil.copy2(f, STRUCTURED_DEST / f.name)
-        return len(files)
+        return _copy_bits_json(Path(tmp))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--fork-path", type=Path, default=REPO_ROOT.parent / "dnd-5e-srd")
+    parser.add_argument("--bits-path", type=Path, default=REPO_ROOT.parent / "5e-database")
     args = parser.parse_args()
     n_text = sync_text(args.fork_path)
-    n_json = sync_structured()
+    n_json = sync_structured(args.bits_path)
     print(f"vendored {n_text} markdown files -> {TEXT_DEST}")
     print(f"vendored {n_json} json files -> {STRUCTURED_DEST}")
 

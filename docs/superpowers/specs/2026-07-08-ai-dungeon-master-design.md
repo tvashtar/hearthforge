@@ -1,7 +1,7 @@
 # AI Dungeon Master — Design Spec
 
 **Date:** 2026-07-08
-**Status:** Approved pending grill-me refinement
+**Status:** Approved (refined via grill-me session 2026-07-08)
 **Goal:** A full-featured, AI-driven dungeon master for a solo D&D 5e campaign. Text-based first, UI later.
 
 ## Decisions (settled during brainstorming)
@@ -16,6 +16,18 @@
 | Session model | Resumable anytime; autosave every command; DB is always the truth |
 | Level range | Levels 1–5 hand-verified at launch; schema and engine designed for 1–20 |
 | LLM↔engine boundary | Command-resolution engine (Option A): LLM issues commands, engine validates/rolls/persists/returns |
+| Combat space | Range bands/zones: engaged / near / far / distant (≈5/30/60/120 ft); AoE via clustering rules |
+| Dice | Player rolls all their PC's dice (delegable per-roll via `/roll`); engine rolls companions/monsters; hidden DM rolls where RAW implies a screen |
+| Spell automation | Tiered: damage/heal/condition spells fully engine-executed; rest get slot/concentration/duration enforcement + `dm_ruling` resolution |
+| Ability scores | Player's choice: rolled (4d6-drop-lowest, player-rolled), standard array, or point buy; companions use standard array |
+| Companions | DM-generated to complement the PC, recruited in-fiction, full sheets, can permanently die; autonomous with in-fiction suggestions |
+| PC death | Campaign setting: `narrative` (default, defeated-not-dead) or `hardcore` (real death, new PC joins persistent world) |
+| Progression | Engine-awarded XP at RAW thresholds; non-combat resolutions earn the encounter's XP |
+| World generation | Plot skeleton + starting region up front; everything else lazily generated and persisted when approached |
+| Secrecy | Honor system in Phase 1; `gm_only` flag on all payloads from day one for Phase 2/UI enforcement |
+| Sessions | Explicit `end_session` recap + silent mini-recap checkpoints every ~20 events |
+| `dm_ruling` | Full power, mandatory rationale, prominent event-log marking, `dm audit` CLI review |
+| Encounter budget | Advisory: DM must compute and report difficulty, may deliberately deviate (logged) |
 
 ## 1. System overview
 
@@ -82,7 +94,15 @@ Pure, deterministic functions in `rules/` — dice injected as a seeded, logged 
 
 Coverage (v1): ability checks and saving throws with advantage/disadvantage; attack rolls and crits; damage with resistance/vulnerability/immunity; all 15 conditions and their mechanical effects; action economy (action, bonus action, reaction, movement per turn); initiative; short/long rests; death saves; concentration; XP and leveling for levels 1–20; encounter difficulty budgeting (CR/XP-threshold math) so the DM builds fair fights.
 
+**Combat space — range bands.** Each combatant holds an abstract position: `engaged(with X)`, `near`, `far`, `distant` (thresholds ≈ 5/30/60/120 ft). The engine enforces weapon/spell range legality, movement between bands per speed, and opportunity attacks when leaving `engaged`. AoE spells hit N targets via clustering rules (targets in the same band, capped per spell record) — RAW-adjacent by design; exact templates arrive with the Phase 3 UI if ever.
+
+**Dice ownership.** All of the player PC's dice (d20s, damage, hit dice, death saves) are player-rolled and reported to the DM; any single roll is delegable to the engine via `/roll`. Player-supplied values enter commands as an optional input and are flagged `player_supplied` in the event log. Companions and monsters are always engine-rolled. The engine performs **hidden rolls** where RAW implies a DM screen (enemy stealth, contested checks against the player); hidden results carry `gm_only` and the DM narrates around them.
+
+**Spell automation — tiered.** Tier 1 (fully engine-executed from structured effect records): spells reducible to attack/save + damage/heal + condition/duration — the large majority of combat-relevant spells at levels 1–3. Tier 2 (everything else): the engine still enforces slot consumption, concentration, and duration; the *effect* resolves via `dm_ruling` with the SRD spell text retrieved. Effect records are added over time, shrinking tier 2.
+
 The engine is data-driven from `rules.sqlite`: it does not hardcode "Fireball," it executes the spell record. Levels 1–5 receive hand-verified test coverage at launch; the schema and code paths carry 1–20 so later tiers are a verification effort, not a redesign.
+
+**Progression.** Engine-awarded XP at RAW thresholds via `award_xp`; the engine announces level-ups. Non-combat resolutions of an encounter earn its full XP value. **Encounter budgeting is advisory:** the DM must compute and report the difficulty rating when building a fight, but may deliberately deviate when the fiction demands — the deviation is logged.
 
 ## 5. Command interface
 
@@ -103,7 +123,10 @@ Command families (~25 commands in v1):
 - **Resources:** `use_item`, `rest` (short/long), inventory operations.
 - **World writes:** `create_npc`, `create_location`, `update_quest` — how the DM's improvisations become persistent facts.
 - **Queries:** `get_character_sheet`, `get_scene_state`, `lookup_rule`, `lookup_monster`, `lookup_spell`.
-- **Escape hatch:** `dm_ruling` — for corner cases the engine doesn't model; requires a written rationale, logged to `event_log`, can override state. RAW coverage gaps must never block play.
+- **Sessions:** `end_session` (DM writes a persisted recap + open-thread updates); the DM also silently checkpoints a mini-recap every ~20 events so an abrupt exit (crash, compaction, closed laptop) still resumes with fresh narrative memory.
+- **Escape hatch:** `dm_ruling` — for corner cases the engine doesn't model; full read/write power, requires a written rationale, prominently marked in `event_log`, reviewable via a `dm audit` CLI listing all rulings. RAW coverage gaps must never block play.
+
+**Result visibility.** Every command result and payload carries a `gm_only` flag from day one. Phase 1 runs on the honor system (tool outputs are collapsed in Claude Code; the player doesn't read them); Phase 2's loop and Phase 3's UI enforce hiding for real. No schema migration later.
 
 ## 6. DM brain (Phase 1)
 
@@ -111,9 +134,12 @@ A `.claude/skills/dm-session` skill defines persona and procedure:
 
 - **On session start:** call `get_campaign_brief`; never trust conversation memory over the DB.
 - **Narration rule:** every mechanical claim (hit, damage, save, resource) must come from a command result.
-- **Companions:** run 1–3 companions as distinct personalities with tactical guidelines; keep the spotlight on the player's PC.
+- **Dice etiquette:** prompt the player to roll their own dice and pass the values through; accept `/roll` as delegation; never reveal `gm_only` results in narration.
+- **Companions:** DM-generated to complement the player's build (preferences gathered in the campaign interview), recruited in-fiction as real NPCs with full sheets. They act **autonomously** on personality + tactical doctrine set at recruitment; the player can suggest in-fiction and they usually comply. They can permanently die; replacements emerge through play. Keep the spotlight on the player's PC.
 - **World persistence rule:** improvised facts (a new NPC, a rumor, a location) must be written back via world-write commands, or they didn't happen.
-- **Campaign creation:** an interview with the player (tone, themes, hard limits, character concept) → generate the plot skeleton → persist via `create_campaign`. The campaign has a spine that survives across sessions and context windows.
+- **Campaign creation:** an interview with the player (tone, themes, hard limits, character concept, companion preferences, death mode: `narrative` default / `hardcore` opt-in) → generate the plot skeleton (premise, 3-act arc outline, 3–5 factions with goals and secrets, endgame condition) **plus a fleshed-out starting region** (town, 5–10 NPCs, 3–5 hooks, first dungeon) → persist via `create_campaign`. Everything beyond the starting region is generated lazily when approached and persisted via world-write commands.
+- **Character creation:** guided interview; ability scores by player's choice of rolled 4d6-drop-lowest (player rolls), standard array, or point buy. Companions use standard array.
+- **PC defeat:** in `narrative` mode a failed final death save means *defeated, not dead* — the DM invents real consequences (capture, loss, rescue at cost). In `hardcore` mode death is final; the player makes a new character who joins the persistent world (or promotes a companion). Death-save mechanics run identically in both.
 
 ## 7. Error handling & integrity
 

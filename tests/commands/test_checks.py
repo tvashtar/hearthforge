@@ -350,3 +350,53 @@ def test_skill_check_expertise_doubles_proficiency(ctx):
     merely_proficient = registry.execute("skill_check", ctx, character="Sable",
                                          skill="acrobatics", dc=10, player_value=10)
     assert merely_proficient.data["modifier"] == 6
+
+
+# -- own tests: tool_check ----------------------------------------------------
+
+def _make_rogue(ctx, expertise=("thieves_tools",)):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_character(kira["id"], status="dead")
+    registry.execute(
+        "create_character", ctx, name="Sable", role="pc",
+        class_slug="rogue", race_slug="wood-elf",
+        abilities={"str": 8, "dex": 18, "con": 12, "int": 11, "wis": 12, "cha": 10},
+        ac=15, speed=35,
+        proficiencies={"skills": ["stealth"], "tools": ["thieves_tools"],
+                       "expertise": list(expertise)},
+        attacks=[{"weapon": "shortsword"}],
+    )
+
+
+def test_tool_check_expertise_and_explicit_ability(ctx):
+    _make_rogue(ctx)
+    result = registry.execute("tool_check", ctx, character="Sable",
+                              tool="thieves_tools", ability="dex", dc=15,
+                              player_value=10)
+    assert result.ok
+    assert result.data["modifier"] == 8            # +4 dex, +2 prof ×2
+    assert result.data["total"] == 18
+    assert result.data["success"] is True
+    # same tool, different ability: recalling trap designs with INT
+    brainy = registry.execute("tool_check", ctx, character="Sable",
+                              tool="thieves_tools", ability="int", dc=10,
+                              player_value=10)
+    assert brainy.data["modifier"] == 4            # +0 int, +2 prof ×2
+
+
+def test_tool_check_unproficient_gets_bare_ability(ctx):
+    _make_rogue(ctx, expertise=())
+    result = registry.execute("tool_check", ctx, character="Sable",
+                              tool="herbalism_kit", ability="wis", dc=10,
+                              player_value=10)
+    assert result.data["modifier"] == 1            # bare WIS
+
+
+def test_tool_check_refuses_bad_inputs(ctx):
+    _make_rogue(ctx)
+    assert not registry.execute("tool_check", ctx, character="Nobody",
+                                tool="thieves_tools", ability="dex", dc=10).ok
+    assert not registry.execute("tool_check", ctx, character="Sable",
+                                tool="thieves_tools", ability="luck", dc=10).ok
+    assert not registry.execute("tool_check", ctx, character="Sable",
+                                tool="thieves_tools", ability="dex", dc=0).ok

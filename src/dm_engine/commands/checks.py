@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
-from dm_engine.models.character import SKILL_ABILITIES
-from dm_engine.rules.character_build import skill_modifier
+from dm_engine.models.character import SKILL_ABILITIES, normalize_slug
+from dm_engine.rules.character_build import skill_modifier, tool_bonus
 from dm_engine.rules.checks import (
     ability_modifier,
     combine_advantage,
@@ -166,6 +166,61 @@ def skill_check(
     digest = f"{character} {_label(skill)} check: {check.d20.total} vs DC {dc} — {outcome}"
     return CommandResult(
         ok=True, command="skill_check", digest=digest, data=data, gm_only=gm_only
+    )
+
+
+@command("tool_check")
+def tool_check(
+    ctx: CommandContext,
+    character: str,
+    tool: str,
+    ability: str,
+    dc: int,
+    advantage: bool = False,
+    disadvantage: bool = False,
+    player_value: int | None = None,
+    gm_only: bool = False,
+    **kwargs,
+) -> CommandResult:
+    """Tool proficiency check. Tools have no fixed ability in RAW (thieves'
+    tools + DEX to pick a lock, + INT to recall trap designs), so the
+    ability is an explicit argument."""
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("tool_check", f"no character named {character!r}")
+    if ability not in _ABILITIES:
+        return refuse("tool_check", f"unknown ability {ability!r}")
+    if dc < 1:
+        return refuse("tool_check", f"dc must be >= 1 (got {dc})")
+    reason = _validate_player_value(char, player_value)
+    if reason:
+        return refuse("tool_check", reason)
+
+    tool_slug = normalize_slug(tool)
+    modifier = ability_modifier(char["abilities"][ability]) + tool_bonus(
+        tool_slug, char["proficiencies"], char["level"]
+    )
+    mode = combine_advantage(advantage, disadvantage)
+    check = resolve_check(
+        ctx.roller, modifier, dc, mode, player_value=player_value, gm_only=gm_only
+    )
+    data = {
+        "tool": tool_slug,
+        "ability": ability,
+        "modifier": modifier,
+        "dc": dc,
+        "natural": check.d20.natural,
+        "total": check.d20.total,
+        "success": check.success,
+        "margin": check.margin,
+    }
+    outcome = "success" if check.success else "failure"
+    digest = (
+        f"{character} {_label(tool_slug)} ({ability.upper()}) check: "
+        f"{check.d20.total} vs DC {dc} — {outcome}"
+    )
+    return CommandResult(
+        ok=True, command="tool_check", digest=digest, data=data, gm_only=gm_only
     )
 
 

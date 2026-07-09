@@ -95,9 +95,24 @@ def test_normalizer_second_run_adds_no_event(old_campaign, rules_path):
 
 
 def test_normalizer_noop_on_valid_rows(tmp_path, rules_path):
+    from dm_engine.commands import registry
+    from dm_engine.commands.registry import CommandContext, RecordingRoller
+
     store = CampaignStore.create(
         tmp_path / "c", slug="new", name="N", death_mode="narrative",
         rng_seed=7, skeleton={"premise": "t"},
     )
+    ctx = CommandContext(
+        store=store, roller=RecordingRoller(7), rules=RulesDB(rules_path)
+    )
+    result = registry.execute(
+        "create_character", ctx, name="Kira", role="pc", class_slug="fighter",
+        race_slug="human",
+        abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
+    )
+    assert result.ok, result.refusal  # sanity: row is genuinely valid post-fix
+
     assert normalize_characters(store, RulesDB(rules_path)) == []
     store.close()

@@ -166,6 +166,11 @@ Within the frozen contracts: bad *input* → structured `ok=False` refusal
 (unknown weapon slug, bad skill name, expertise not a subset, caller-supplied
 saves, malformed custom spec). Engine-side invariant violations (a stored
 spec failing validation after migration) raise — those are bugs (FC-3).
+Stored specs the migration deliberately leaves unfixed (§5) are a distinct,
+expected case, not an invariant violation: they are refused cleanly on use
+and rendered as a degraded line on sheets (§4); "a stored spec failing
+validation raises" applies only to specs that were engine-derived/validated
+at creation and have since been corrupted.
 
 ### 7. Testing
 

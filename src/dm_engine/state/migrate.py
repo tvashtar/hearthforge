@@ -71,8 +71,15 @@ def _normalize_attacks(char: dict, rules: RulesDB) -> list[dict] | None:
 
 
 def normalize_characters(store: CampaignStore, rules: RulesDB) -> list[str]:
-    """Returns one human-readable note per fixed character (empty = no-op)."""
+    """Returns one human-readable note per fixed character (empty = no-op).
+
+    Informational notes (e.g. saves underivable for an unknown class) are
+    regenerated on every open, so on their own they are NOT changes: they
+    only ride along — in the audit event and the return value — when at
+    least one row was actually rewritten. Otherwise every open would log a
+    fresh event and re-trigger sheet rewrites, breaking idempotency."""
     changes: list[str] = []
+    info_notes: list[str] = []
     ids = [r[0] for r in store.conn.execute("SELECT id FROM characters")]
     with store.transaction():
         for cid in ids:
@@ -90,8 +97,9 @@ def normalize_characters(store: CampaignStore, rules: RulesDB) -> list[str]:
                     f"{char['name']}: normalized {', '.join(sorted(fields))}"
                 )
             if note:
-                changes.append(note)
+                info_notes.append(note)
         if changes:
+            changes = changes + info_notes
             store.append_event(
                 command="migrate_normalize",
                 inputs={},

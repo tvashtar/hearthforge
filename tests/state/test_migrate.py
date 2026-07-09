@@ -85,6 +85,69 @@ def test_normalizer_logs_an_audit_event_when_it_fixes_rows(old_campaign, rules_p
     assert result["data"]["notes"] == changes
 
 
+def test_note_only_unknown_class_row_never_logs_events(tmp_path, rules_path):
+    """A row whose only issue is an unknown class (saves underivable) has its
+    note regenerated on EVERY open. That must not append a migrate_normalize
+    event or report changes each time — the event audits actual rewrites; the
+    informational note only rides along with one."""
+    from dm_engine.models.character import AttackSpec
+
+    store = CampaignStore.create(
+        tmp_path / "c", slug="hb", name="HB", death_mode="narrative",
+        rng_seed=7, skeleton={"premise": "t"},
+    )
+    valid_attack = AttackSpec(
+        name="Claw", ability="str", damage="1d6", damage_type="slashing",
+        ranged=False, range_ft=5,
+    ).model_dump()
+    store.conn.execute(
+        "INSERT INTO characters (name, role, class_slug, race_slug, level,"
+        " abilities, max_hp, ac, speed, proficiencies, attacks, spells_known)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("Grix", "pc", "homebrew-warden", "human", 1,
+         json.dumps({"str": 14, "dex": 10, "con": 12, "int": 10, "wis": 10, "cha": 10}),
+         10, 14, 30,
+         json.dumps({"saves": [], "skills": [], "expertise": [],
+                     "tools": [], "languages": []}),
+         json.dumps([valid_attack]),
+         json.dumps([])),
+    )
+    store.conn.execute(
+        "INSERT INTO resources (character_id, hp, hit_dice_remaining, spell_slots)"
+        " VALUES (1, 10, 1, '{}')",
+    )
+    store.conn.commit()
+
+    rules = RulesDB(rules_path)
+    assert normalize_characters(store, rules) == []
+    assert normalize_characters(store, rules) == []
+    assert store.event_count() == 0
+    store.close()
+
+
+def test_unknown_class_note_rides_along_with_a_real_fix(old_campaign, rules_path):
+    """When a row actually gets rewritten, an accompanying unknown-class note
+    is included in the audit event rather than dropped."""
+    # Unknown class AND no saves anywhere -> the note fires; the remaining
+    # normalizable material (underscore slugs, monster-style attacks) still
+    # produces a real rewrite for the note to ride along with.
+    old_campaign.conn.execute(
+        "UPDATE characters SET class_slug = 'homebrew-warden',"
+        " proficiencies = ? WHERE name = 'Algarve'",
+        (json.dumps({"skills": ["stealth"], "expertise": [],
+                     "tools": [], "languages": []}),),
+    )
+    old_campaign.conn.commit()
+
+    changes = normalize_characters(old_campaign, RulesDB(rules_path))
+    assert changes  # saving_throws rename + attack re-derivation still fix rows
+    assert any("unknown class 'homebrew-warden'" in c for c in changes)
+    row = old_campaign.conn.execute(
+        "SELECT result FROM event_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert json.loads(row["result"])["data"]["notes"] == changes
+
+
 def test_normalizer_second_run_adds_no_event(old_campaign, rules_path):
     rules = RulesDB(rules_path)
     normalize_characters(old_campaign, rules)

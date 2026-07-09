@@ -107,3 +107,31 @@ class RulesDB:
             (*params, limit),
         ).fetchall()
         return [SpellSummary(*row) for row in rows]
+
+    def get_class_level(self, class_slug: str, level: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT data FROM class_levels WHERE class_slug=? AND level=?",
+            (class_slug, level),
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def spell_slots_for(self, class_slug: str, level: int) -> dict[int, int]:
+        """Return {slot_level: count} for slot levels with count > 0.
+
+        Reads the `spellcasting` column only. Warlock pact-magic slots are
+        stored under `class_specific` in the upstream data, not
+        `spellcasting`, so this returns `{}` for warlock at most levels.
+        Fine for v1; a future task can add class_specific-aware handling.
+        """
+        row = self._conn.execute(
+            "SELECT spellcasting FROM class_levels WHERE class_slug=? AND level=?",
+            (class_slug, level),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return {}
+        spellcasting = json.loads(row[0])
+        return {
+            int(k.rsplit("_", 1)[1]): v
+            for k, v in spellcasting.items()
+            if k.startswith("spell_slots_level_") and v > 0
+        }

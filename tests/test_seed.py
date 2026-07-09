@@ -61,3 +61,17 @@ def test_fts_index_finds_rules_text(rules_db):
             ('"opportunity attack"',),
         ).fetchall()
     assert any("Opportunity Attacks" in p for (p,) in rows)
+
+
+def test_class_levels_table(rules_db):
+    import contextlib
+
+    with contextlib.closing(sqlite3.connect(rules_db)) as conn:
+        (n,) = conn.execute("SELECT COUNT(*) FROM class_levels").fetchone()
+        assert n == 240  # 12 classes x 20 levels, subclass rows excluded
+        row = conn.execute(
+            "SELECT prof_bonus, spellcasting FROM class_levels"
+            " WHERE class_slug='cleric' AND level=1"
+        ).fetchone()
+        assert row[0] == 2
+        assert json.loads(row[1])["spell_slots_level_1"] == 2

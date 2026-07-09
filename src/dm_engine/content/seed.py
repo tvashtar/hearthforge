@@ -36,6 +36,11 @@ CREATE TABLE conditions (slug TEXT PRIMARY KEY, name TEXT NOT NULL, data TEXT NO
 CREATE TABLE features (
     slug TEXT PRIMARY KEY, name TEXT NOT NULL, class_slug TEXT, level INTEGER, data TEXT NOT NULL
 );
+CREATE TABLE class_levels (
+    class_slug TEXT, level INTEGER, prof_bonus INTEGER,
+    spellcasting TEXT, features TEXT, data TEXT,
+    PRIMARY KEY (class_slug, level)
+);
 CREATE VIRTUAL TABLE srd_text USING fts5(source, heading_path, heading, body);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
@@ -101,6 +106,21 @@ def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str
             placeholders = ",".join("?" * len(cols))
             conn.execute(f"INSERT INTO {table} VALUES ({placeholders})", cols)
 
+    for raw in _records(structured_dir, "5e-SRD-Levels.json"):
+        if "subclass" in raw:
+            continue
+        conn.execute(
+            "INSERT INTO class_levels VALUES (?,?,?,?,?,?)",
+            (
+                raw["class"]["index"],
+                raw["level"],
+                raw["prof_bonus"],
+                json.dumps(raw["spellcasting"]) if "spellcasting" in raw else None,
+                json.dumps(raw.get("features", [])),
+                json.dumps(raw),
+            ),
+        )
+
     for md_file in sorted(text_dir.glob("*.md")):
         for sec in parse_sections(md_file.read_text(), source=md_file.name):
             conn.execute(
@@ -112,7 +132,8 @@ def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str
     counts = {}
     for table in [
         "monsters", "spells", "classes", "races",
-        "equipment", "magic_items", "conditions", "features", "srd_text",
+        "equipment", "magic_items", "conditions", "features",
+        "class_levels", "srd_text",
     ]:
         counts[table] = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
     conn.close()

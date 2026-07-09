@@ -24,6 +24,7 @@ CREATE TABLE campaign (
     death_mode TEXT NOT NULL CHECK (death_mode IN ('narrative','hardcore')),
     rng_seed INTEGER NOT NULL,
     rng_draws INTEGER NOT NULL DEFAULT 0,
+    rng_state TEXT,
     skeleton TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -201,6 +202,9 @@ class CampaignStore:
 
     def set_rng_draws(self, draws: int) -> None:
         self.conn.execute("UPDATE campaign SET rng_draws = ? WHERE id = 1", (draws,))
+
+    def set_rng_state(self, state_json: str) -> None:
+        self.conn.execute("UPDATE campaign SET rng_state = ? WHERE id = 1", (state_json,))
 
     def world_clock(self) -> dict:
         return dict(self.conn.execute("SELECT * FROM world_clock WHERE id = 1").fetchone())

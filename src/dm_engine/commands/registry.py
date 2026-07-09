@@ -9,6 +9,7 @@ engine bugs, never gameplay.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
 
@@ -59,6 +60,20 @@ class RecordingRoller:
     def captured(self) -> list[Roll]:
         return list(self._captured)
 
+    def getstate(self) -> list:
+        """JSON-serializable snapshot of the inner RNG state.
+
+        Reaches into SeededDiceRoller's internal `_rng` (its private
+        random.Random) — deliberate engine-internal plumbing so we can
+        persist the exact RNG position rather than fast-forwarding it.
+        """
+        version, internal, gauss = self._inner._rng.getstate()
+        return [version, list(internal), gauss]
+
+    def setstate(self, state: list) -> None:
+        version, internal, gauss = state
+        self._inner._rng.setstate((version, tuple(internal), gauss))
+
 
 class CommandContext:
     def __init__(self, store: CampaignStore, roller: RecordingRoller, rules: RulesDB):
@@ -86,6 +101,7 @@ def execute(name: str, ctx: CommandContext, **kwargs) -> CommandResult:
         )
         result.event_ids = [event_id]
         ctx.store.set_rng_draws(ctx.roller.draws)
+        ctx.store.set_rng_state(json.dumps(ctx.roller.getstate()))
         if result.ok:
             sheets.write_party_sheets(ctx.store)
     return result
@@ -96,5 +112,12 @@ def open_campaign_context(
 ) -> CommandContext:
     store = CampaignStore.open(campaigns_dir, slug)
     meta = store.campaign_meta()
-    roller = RecordingRoller(meta["rng_seed"], initial_draws=meta["rng_draws"])
+    if meta.get("rng_state") is not None:
+        roller = RecordingRoller(meta["rng_seed"])
+        roller.draws = meta["rng_draws"]
+        roller.setstate(json.loads(meta["rng_state"]))
+    else:
+        # Legacy/fresh campaigns with no persisted RNG state: fall back to
+        # fast-forwarding d20 draws (only exact when all prior rolls were d20).
+        roller = RecordingRoller(meta["rng_seed"], initial_draws=meta["rng_draws"])
     return CommandContext(store=store, roller=roller, rules=RulesDB(rules_db_path))

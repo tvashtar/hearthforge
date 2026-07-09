@@ -104,6 +104,43 @@ def test_cmd_cli_refusal_still_exits_0(tmp_path, rules_path):
     assert payload["ok"] is False
 
 
+def test_new_then_resume_cli_round_trip(tmp_path, rules_path):
+    campaigns_dir = tmp_path / "campaigns"
+    result = runner.invoke(app, [
+        "new", "voidkeep",
+        "--name", "The Void Keep",
+        "--campaigns-dir", str(campaigns_dir),
+        "--db", str(rules_path),
+    ])
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["data"]["slug"] == "voidkeep"
+
+    result = runner.invoke(app, [
+        "resume", "voidkeep",
+        "--campaigns-dir", str(campaigns_dir),
+        "--db", str(rules_path),
+    ])
+    assert result.exit_code == 0
+    brief = json.loads(result.output)
+    assert brief["ok"] is True
+    assert brief["data"]["campaign"]["name"] == "The Void Keep"
+
+
+def test_new_cli_exits_1_when_slug_exists(tmp_path, rules_path):
+    campaigns_dir = tmp_path / "campaigns"
+    args = [
+        "new", "dup-slug", "--name", "Dup",
+        "--campaigns-dir", str(campaigns_dir), "--db", str(rules_path),
+    ]
+    first = runner.invoke(app, args)
+    assert first.exit_code == 0
+
+    second = runner.invoke(app, args)
+    assert second.exit_code == 1
+
+
 def test_cmd_cli_unknown_campaign_exits_1(tmp_path, rules_path):
     result = runner.invoke(app, [
         "cmd", "skill_check",

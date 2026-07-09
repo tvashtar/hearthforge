@@ -6,6 +6,8 @@ import typer
 
 import dm_engine
 import dm_engine.commands  # noqa: F401 — importing registers every command
+from dm_engine.commands.campaign import bootstrap_campaign
+from dm_engine.commands.envelope import CommandResult
 from dm_engine.commands.registry import execute, open_campaign_context
 from dm_engine.content.lookup import DEFAULT_DB, RulesDB
 from dm_engine.state.sheets import render_character_sheet
@@ -61,6 +63,59 @@ def sheet(
         typer.echo(render_character_sheet(store, char["id"]))
     finally:
         store.close()
+
+
+@app.command("new")
+def new_campaign(
+    slug: str,
+    name: str = typer.Option(..., help="Campaign name"),
+    death_mode: str = typer.Option("narrative", help="'narrative' or 'hardcore'"),
+    seed: int | None = typer.Option(None, help="RNG seed (random if omitted)"),
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
+) -> None:
+    """Create a new campaign with a minimal skeleton (DM fills it in later)."""
+    skeleton = {"premise": f"{name} (created via CLI; skeleton to be written by the DM)"}
+    try:
+        ctx = bootstrap_campaign(
+            campaigns_dir, db, slug=slug, name=name, death_mode=death_mode,
+            skeleton=skeleton, seed=seed,
+        )
+    except FileExistsError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        result = CommandResult(
+            ok=True, command="create_campaign",
+            digest=f"Campaign '{name}' created",
+            data={"slug": slug, "name": name, "death_mode": death_mode},
+        )
+        typer.echo(result.model_dump_json(indent=2))
+    finally:
+        ctx.store.close()
+
+
+@app.command("resume")
+def resume_campaign(
+    slug: str,
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
+) -> None:
+    """Open a campaign (snapshotting it) and print the session brief."""
+    try:
+        ctx = open_campaign_context(campaigns_dir, slug, db)
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        result = execute("get_campaign_brief", ctx)
+    finally:
+        ctx.store.close()
+    typer.echo(result.model_dump_json(indent=2))
 
 
 @lookup_app.command("rule")
@@ -120,6 +175,21 @@ def audit(
             typer.echo(f"  {result.get('digest', '')}")
     finally:
         store.close()
+
+
+@app.command("mcp")
+def mcp(
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
+) -> None:
+    """Run the MCP server over stdio (for Claude Code to drive the engine)."""
+    import anyio
+
+    from dm_engine.mcp.server import run_stdio
+
+    anyio.run(run_stdio, campaigns_dir, db)
 
 
 @app.command("cmd")

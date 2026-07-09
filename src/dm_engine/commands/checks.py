@@ -42,6 +42,79 @@ SKILL_ABILITIES: dict[str, str] = {
 
 _ABILITIES = ("str", "dex", "con", "int", "wis", "cha")
 
+_ABILITY_FULL_NAMES: dict[str, str] = {
+    "str": "strength",
+    "dex": "dexterity",
+    "con": "constitution",
+    "int": "intelligence",
+    "wis": "wisdom",
+    "cha": "charisma",
+}
+
+
+def _find_monster_combatant(ctx: CommandContext, character: str) -> dict | None:
+    combat = ctx.store.combat()
+    if not combat["active"]:
+        return None
+    for combatant in combat["combatants"]:
+        if combatant.get("key") == character and combatant.get("kind") == "monster":
+            return combatant
+    return None
+
+
+def _monster_skill_modifier(record, skill: str) -> int:
+    """Modifier for `skill`: the SRD proficiency `value` if listed (it's the
+    TOTAL modifier, not an add-on), else the raw ability modifier."""
+    ability = SKILL_ABILITIES[skill]
+    proficiencies = (record.model_extra or {}).get("proficiencies", [])
+    for entry in proficiencies:
+        index = entry.get("proficiency", {}).get("index")
+        if index == f"skill-{skill}":
+            return entry["value"]
+    full_name = _ABILITY_FULL_NAMES[ability]
+    return ability_modifier(getattr(record, full_name))
+
+
+def _monster_skill_check(
+    ctx: CommandContext,
+    combatant: dict,
+    skill: str,
+    dc: int,
+    advantage: bool,
+    disadvantage: bool,
+    player_value: int | None,
+    gm_only: bool,
+) -> CommandResult:
+    character = combatant["key"]
+    if player_value is not None:
+        return refuse(
+            "skill_check",
+            f"{character} is a monster; only PCs report a player_value "
+            "(monsters are engine-rolled)",
+        )
+    record = ctx.rules.get_monster(combatant["monster_slug"])
+    if record is None:
+        return refuse("skill_check", f"no character named {character!r}")
+
+    modifier = _monster_skill_modifier(record, skill)
+    mode = combine_advantage(advantage, disadvantage)
+
+    check = resolve_check(ctx.roller, modifier, dc, mode, player_value=None, gm_only=gm_only)
+    data = {
+        "skill": skill,
+        "modifier": modifier,
+        "dc": dc,
+        "natural": check.d20.natural,
+        "total": check.d20.total,
+        "success": check.success,
+        "margin": check.margin,
+    }
+    outcome = "success" if check.success else "failure"
+    digest = f"{character} {_label(skill)} check: {check.d20.total} vs DC {dc} — {outcome}"
+    return CommandResult(
+        ok=True, command="skill_check", digest=digest, data=data, gm_only=gm_only
+    )
+
 
 def _label(slug: str) -> str:
     return slug.replace("-", " ").title()
@@ -75,7 +148,16 @@ def skill_check(
 ) -> CommandResult:
     char = ctx.store.get_character(character)
     if char is None:
-        return refuse("skill_check", f"no character named {character!r}")
+        combatant = _find_monster_combatant(ctx, character)
+        if combatant is None:
+            return refuse("skill_check", f"no character named {character!r}")
+        if skill not in SKILL_ABILITIES:
+            return refuse("skill_check", f"unknown skill {skill!r}")
+        if dc < 1:
+            return refuse("skill_check", f"dc must be >= 1 (got {dc})")
+        return _monster_skill_check(
+            ctx, combatant, skill, dc, advantage, disadvantage, player_value, gm_only
+        )
     if skill not in SKILL_ABILITIES:
         return refuse("skill_check", f"unknown skill {skill!r}")
     if dc < 1:

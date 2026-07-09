@@ -30,5 +30,10 @@ class Combatant(BaseModel):
     engaged_with: list[str] = []
     conditions: list[str] = []  # monsters only
     defeated: bool = False
+    # v1 surprise: cleared after round 1; suppresses the round-1 budget.
+    surprised: bool = False
+    # reaction spent since the top of this round (opportunity attacks etc.);
+    # reset by next_turn each round. Consumed by Task 8's reaction commands.
+    reaction_used: bool = False
     # current-turn action economy, reset by next_turn (JSON of rules TurnBudget)
     budget: dict | None = None

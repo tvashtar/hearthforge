@@ -1481,8 +1481,9 @@ def test_bow_bands():
     assert weapon_range_legality("near", 80, 320, ranged=True) == "normal"
     assert weapon_range_legality("far", 80, 320, ranged=True) == "normal"
     assert weapon_range_legality("distant", 80, 320, ranged=True) == "disadvantage"
-    # Dagger thrown 20/60: near is fine, far is long range, distant is out.
-    assert weapon_range_legality("near", 20, 60, ranged=True) == "normal"
+    # Dagger thrown 20/60: near (30 ft) already exceeds the 20 ft normal
+    # range, so it is a long-range throw; far is long range too; distant is out.
+    assert weapon_range_legality("near", 20, 60, ranged=True) == "disadvantage"
     assert weapon_range_legality("far", 20, 60, ranged=True) == "disadvantage"
     assert weapon_range_legality("distant", 20, 60, ranged=True) == "out_of_range"
 

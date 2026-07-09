@@ -11,6 +11,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from dm_engine.models.character import SKILL_ABILITIES
+from dm_engine.rules.character_build import (
+    attack_damage_mod,
+    attack_to_hit,
+    skill_modifier,
+    tool_bonus,
+)
 from dm_engine.rules.checks import ability_modifier, proficiency_bonus
 from dm_engine.rules.progression import xp_to_next_level
 from dm_engine.state.store import CampaignStore
@@ -112,28 +119,73 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
         lines.append(f"- Failures: {fail}")
         lines.append("")
 
-    # Proficiencies
     profs = char["proficiencies"]
-    lines.append("## Proficiencies")
-    skills = profs.get("skills", [])
-    saves = profs.get("saves", [])
-    lines.append(f"- Skills: {', '.join(skills) if skills else 'none'}")
-    lines.append(f"- Saves: {', '.join(saves) if saves else 'none'}")
+
+    # Saving throws — all six, proficient first
+    save_profs = profs.get("saves", [])
+    lines.append("## Saving Throws")
+
+    def _save_entry(ability: str) -> str:
+        marker = "◉" if ability in save_profs else "○"
+        mod = ability_modifier(abilities[ability]) + (
+            prof if ability in save_profs else 0
+        )
+        return f"{marker} {ability.upper()} {_fmt_mod(mod)}"
+
+    proficient = [a for a in _ABILITY_ORDER if a in save_profs]
+    plain = [a for a in _ABILITY_ORDER if a not in save_profs]
+    if proficient:
+        lines.append("- " + "   ".join(_save_entry(a) for a in proficient))
+    lines.append("- " + "   ".join(_save_entry(a) for a in plain))
     lines.append("")
 
-    # Attacks
+    # Skills — all 18: expertise, then proficient, then the rest
+    skill_list = profs.get("skills", [])
+    expertise = profs.get("expertise", [])
+    lines.append("## Skills")
+
+    def _skill_rank(s: str) -> tuple:
+        return (s not in expertise, s not in skill_list, s)
+
+    for skill in sorted(SKILL_ABILITIES, key=_skill_rank):
+        mod = skill_modifier(skill, profs, abilities, level)
+        label = skill.replace("-", " ").title()
+        if skill in expertise:
+            lines.append(f"- ◉◉ {label} {_fmt_mod(mod)} (expertise)")
+        elif skill in skill_list:
+            lines.append(f"- ◉ {label} {_fmt_mod(mod)}")
+        else:
+            lines.append(f"- ○ {label} {_fmt_mod(mod)}")
+    passive = 10 + skill_modifier("perception", profs, abilities, level)
+    lines.append(f"- Passive Perception: {passive}")
+    lines.append("")
+
+    # Tools — proficiency component only (ability chosen per check)
+    tools = profs.get("tools", [])
+    if tools:
+        lines.append("## Tools")
+        for tool in tools:
+            bonus = tool_bonus(tool, profs, level)
+            marker = "◉◉" if tool in expertise else "◉"
+            lines.append(f"- {marker} {tool} (prof {_fmt_mod(bonus)})")
+        lines.append("")
+
+    # Attacks — computed exactly as the resolver computes them
     lines.append("## Attacks")
     if char["attacks"]:
         for atk in char["attacks"]:
-            ability = atk.get("ability", "str")
-            ability_mod = ability_modifier(abilities[ability])
-            to_hit = ability_mod + (prof if atk.get("proficient") else 0)
-            damage = atk.get("damage", "")
-            if ability_mod:
-                damage = f"{damage}{_fmt_mod(ability_mod)}"
-            dtype = atk.get("damage_type", "")
+            to_hit = attack_to_hit(atk, abilities, level)
+            dmg_mod = attack_damage_mod(atk, abilities)
+            damage = atk["damage"] + (_fmt_mod(dmg_mod) if dmg_mod else "")
+            if atk.get("ranged") and atk.get("long_range_ft"):
+                annot = f" ({atk['range_ft']}/{atk['long_range_ft']})"
+            elif "finesse" in atk.get("properties", []):
+                annot = " (finesse)"
+            else:
+                annot = ""
             lines.append(
-                f"- {atk['name']}: {_fmt_mod(to_hit)} to hit, {damage} {dtype}".rstrip()
+                f"- {atk['name']}: {_fmt_mod(to_hit)} to hit, "
+                f"{damage} {atk['damage_type']}{annot}"
             )
     else:
         lines.append("- none")

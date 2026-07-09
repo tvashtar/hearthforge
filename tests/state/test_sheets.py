@@ -2,6 +2,52 @@ from dm_engine.commands import registry
 from dm_engine.state.sheets import render_character_sheet
 
 
+def test_sheet_renders_full_saves_skills_tools_attacks(party):
+    ctx = party
+    # party() already has Kira; create a rich rogue as a companion for
+    # rendering (companions don't need the PC slot, and the sheet renders
+    # the same regardless of role).
+    registry.execute(
+        "create_character", ctx, name="Sable", role="companion",
+        class_slug="rogue", race_slug="wood-elf",
+        abilities={"str": 8, "dex": 18, "con": 12, "int": 11, "wis": 12, "cha": 10},
+        ac=15, speed=35,
+        proficiencies={"skills": ["stealth", "acrobatics", "perception"],
+                       "tools": ["thieves_tools"],
+                       "expertise": ["stealth", "thieves_tools"]},
+        attacks=[{"weapon": "shortsword"}, {"weapon": "shortbow"}],
+    )
+    md = render_character_sheet(ctx.store, ctx.store.get_character("Sable")["id"])
+
+    # Saving throws: all six, proficient first with filled markers
+    assert "## Saving Throws" in md
+    assert "◉ DEX +6" in md and "◉ INT +2" in md
+    assert "○ STR -1" in md and "○ CON +1" in md and "○ WIS +1" in md and "○ CHA +0" in md
+
+    # Skills: all 18, expertise/proficient/plain tiers, passive perception
+    assert "## Skills" in md
+    assert "◉◉ Stealth +8 (expertise)" in md
+    assert "◉ Acrobatics +6" in md
+    assert "○ Athletics -1" in md
+    assert md.count("◉") >= 6 and "Animal Handling" in md   # full 18 present
+    assert "Passive Perception: 13" in md                   # 10 + (1 wis + 2 prof)
+
+    # Tools
+    assert "## Tools" in md
+    assert "◉◉ thieves-tools (prof +4)" in md
+
+    # Attacks: computed to-hit, annotations
+    assert "Shortsword: +6 to hit, 1d6+4 piercing (finesse)" in md
+    assert "Shortbow: +6 to hit, 1d6+4 piercing (80/320)" in md
+
+
+def test_sheet_saves_section_replaces_old_proficiencies_block(party):
+    ctx = party
+    md = render_character_sheet(ctx.store, ctx.store.get_character("Kira")["id"])
+    assert "## Proficiencies" not in md
+    assert "◉ STR" in md and "◉ CON" in md      # fighter's derived saves
+
+
 def test_sheet_renders_core_fields(ctx):
     registry.execute(
         "create_character", ctx, name="Kira", role="pc", class_slug="fighter",

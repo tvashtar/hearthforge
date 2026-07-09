@@ -83,6 +83,13 @@ approaches it, and persisted with world-write commands at that moment.
 Create the PC with `create_character` (role `"pc"`), then introduce
 companions IN FICTION — they are recruited through play, not spawned.
 
+- `create_character` mechanics are engine-derived: pass attacks as
+  `{"weapon": "<srd-slug>"}` (add `"custom": {...}` only when no SRD weapon
+  fits) and NEVER supply `saves`/`saving_throws` — save proficiencies come
+  from the class. Declare only choices: `skills`, `expertise`, `tools`,
+  `languages`. Use `tool_check` (explicit ability) for lock picking and
+  other tool work.
+
 ## Companions
 
 - DM-generated to complement the player's build; created with

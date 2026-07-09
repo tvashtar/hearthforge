@@ -37,6 +37,7 @@ src = ["src", "tests"]
 # The frozen binding tests use `;`-joined statements verbatim.
 "tests/commands/test_combat.py" = ["E702"]
 "tests/commands/test_attacks.py" = ["E701", "E702"]
+"tests/commands/test_spells.py" = ["E702"]
 
 [tool.coverage.report]
 exclude_also = [

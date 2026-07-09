@@ -7,5 +7,7 @@ from dm_engine.commands import (  # noqa: F401
     checks,
     combat,
     registry,
+    resources,
+    spells,
     world,
 )

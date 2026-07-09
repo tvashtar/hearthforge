@@ -1,0 +1,201 @@
+"""Rest and item commands.
+
+`rest` applies short/long rests over the whole party (RAW deltas from
+`rules.rests`), refusing while combat is active. `use_item` / `add_item` /
+`remove_item` are thin, refusal-guarded wrappers over the inventory store; a
+healing item with a `heal` notation rolls engine dice and heals via the same
+sink cure-wounds uses.
+"""
+
+from __future__ import annotations
+
+from dm_engine.commands.envelope import CommandResult, refuse
+from dm_engine.commands.registry import CommandContext, command
+from dm_engine.commands.spells import _apply_healing
+from dm_engine.rules.attacks import roll_damage
+from dm_engine.rules.checks import ability_modifier
+from dm_engine.rules.death import DeathSaveState
+from dm_engine.rules.rests import HitDicePool, long_rest, spend_hit_dice
+
+_KINDS = ("short", "long")
+_LONG_REST_MINUTES = 8 * 60
+
+
+@command("rest")
+def rest(
+    ctx: CommandContext,
+    kind: str,
+    hit_dice: dict[str, int] | None = None,
+    player_hit_die_values: list[int] | None = None,
+    **kwargs,
+) -> CommandResult:
+    if kind not in _KINDS:
+        return refuse("rest", f"unknown rest kind {kind!r} (expected short/long)")
+    if ctx.store.combat()["active"]:
+        return refuse("rest", "cannot rest while combat is active")
+    if kind == "short":
+        return _short_rest(ctx, hit_dice or {}, player_hit_die_values)
+    return _long_rest(ctx)
+
+
+def _short_rest(
+    ctx: CommandContext, hit_dice: dict[str, int], player_values: list[int] | None
+) -> CommandResult:
+    # Validate every spend up front so an over-spend refuses before any roll.
+    plan: list[tuple[dict, int, list[int] | None]] = []
+    for name, count in hit_dice.items():
+        char = ctx.store.get_character(name)
+        if char is None or char["status"] != "active":
+            return refuse("rest", f"no active character named {name!r}")
+        if count < 1:
+            return refuse("rest", f"{name} must spend at least one hit die")
+        remaining = ctx.store.get_resources(char["id"])["hit_dice_remaining"]
+        if count > remaining:
+            return refuse(
+                "rest", f"{name} has only {remaining} hit dice remaining (asked {count})"
+            )
+        values = None
+        if char["role"] == "pc" and player_values is not None:
+            if len(player_values) != count:
+                return refuse(
+                    "rest",
+                    f"{name}: expected {count} hit-die values, got {len(player_values)}",
+                )
+            values = player_values
+        plan.append((char, count, values))
+
+    per_character: list[dict] = []
+    for char, count, values in plan:
+        cid = char["id"]
+        res = ctx.store.get_resources(cid)
+        hit_die = ctx.rules.get_class(char["class_slug"])["hit_die"]
+        con_mod = ability_modifier(char["abilities"]["con"])
+        pool = HitDicePool(
+            die=hit_die, total=char["level"], remaining=res["hit_dice_remaining"]
+        )
+        outcome = spend_hit_dice(
+            ctx.roller, pool, count, con_mod, player_values=values
+        )
+        new_hp = min(char["max_hp"], res["hp"] + outcome.healed)
+        ctx.store.update_resources(
+            cid, hp=new_hp, hit_dice_remaining=outcome.pool.remaining
+        )
+        per_character.append({
+            "name": char["name"], "healed": outcome.healed, "hp": new_hp,
+            "hit_dice_remaining": outcome.pool.remaining,
+        })
+
+    total = sum(c["healed"] for c in per_character)
+    digest = f"Short rest — the party recovers {total} HP"
+    return CommandResult(
+        ok=True, command="rest", digest=digest,
+        data={"kind": "short", "per_character": per_character},
+    )
+
+
+def _long_rest(ctx: CommandContext) -> CommandResult:
+    per_character: list[dict] = []
+    for char in ctx.store.party():
+        if char["status"] != "active":
+            continue
+        cid = char["id"]
+        res = ctx.store.get_resources(cid)
+        hit_die = ctx.rules.get_class(char["class_slug"])["hit_die"]
+        pool = HitDicePool(
+            die=hit_die, total=char["level"], remaining=res["hit_dice_remaining"]
+        )
+        outcome = long_rest(pool, res["exhaustion"])
+        slots = res["spell_slots"]
+        for slot in slots.values():
+            slot["remaining"] = slot["max"]
+        ctx.store.update_resources(
+            cid,
+            hp=char["max_hp"],
+            hit_dice_remaining=outcome.pool.remaining,
+            spell_slots=slots,
+            exhaustion=outcome.exhaustion_level,
+            conditions=[c for c in res["conditions"] if c != "unconscious"],
+            concentration=None,
+            death_saves=DeathSaveState().model_dump(),
+        )
+        per_character.append({
+            "name": char["name"],
+            "healed": char["max_hp"] - res["hp"],
+            "hit_dice_regained": outcome.hit_dice_regained,
+            "exhaustion": outcome.exhaustion_level,
+        })
+
+    clock = ctx.store.world_clock()
+    day_overflow, minutes = divmod(clock["minutes"] + _LONG_REST_MINUTES, 1440)
+    new_day = clock["day"] + day_overflow
+    ctx.store.update_world_clock(day=new_day, minutes=minutes)
+
+    digest = f"Long rest — the party wakes on day {new_day} fully restored"
+    return CommandResult(
+        ok=True, command="rest", digest=digest,
+        data={"kind": "long", "per_character": per_character, "day": new_day},
+    )
+
+
+@command("use_item")
+def use_item(
+    ctx: CommandContext, character: str, item: str, heal: str | None = None, **kwargs
+) -> CommandResult:
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("use_item", f"no character named {character!r}")
+    if not ctx.store.remove_item(char["id"], item, 1):
+        return refuse("use_item", f"{character} is not holding {item!r}")
+
+    if heal is not None:
+        roll = roll_damage(ctx.roller, heal)
+        frag = _apply_healing(ctx, character, roll.total)
+        digest = (
+            f"{character} uses {item} — healed for {frag['healed']} (hp {frag['hp']})"
+        )
+        return CommandResult(
+            ok=True, command="use_item", digest=digest,
+            data={"item": item, "healed": frag["healed"], "hp": frag["hp"]},
+        )
+
+    digest = f"{character} uses {item} — resolve its effect via dm_ruling"
+    return CommandResult(
+        ok=True, command="use_item", digest=digest,
+        data={"item": item, "needs_ruling": True},
+    )
+
+
+@command("add_item")
+def add_item(
+    ctx: CommandContext, character: str, item: str, quantity: int = 1,
+    notes: str | None = None, **kwargs,
+) -> CommandResult:
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("add_item", f"no character named {character!r}")
+    if quantity < 1:
+        return refuse("add_item", "quantity must be at least 1")
+    ctx.store.add_item(char["id"], item, quantity, notes)
+    return CommandResult(
+        ok=True, command="add_item",
+        digest=f"{character} gains {quantity}x {item}",
+        data={"item": item, "quantity": quantity},
+    )
+
+
+@command("remove_item")
+def remove_item(
+    ctx: CommandContext, character: str, item: str, quantity: int = 1, **kwargs
+) -> CommandResult:
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("remove_item", f"no character named {character!r}")
+    if quantity < 1:
+        return refuse("remove_item", "quantity must be at least 1")
+    if not ctx.store.remove_item(char["id"], item, quantity):
+        return refuse("remove_item", f"{character} does not have {quantity}x {item}")
+    return CommandResult(
+        ok=True, command="remove_item",
+        digest=f"{character} loses {quantity}x {item}",
+        data={"item": item, "quantity": quantity},
+    )

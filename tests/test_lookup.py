@@ -45,3 +45,18 @@ def test_lookup_rule_survives_fts_special_chars(rules_db):
     with RulesDB(rules_db) as db:
         hits = db.lookup_rule('opportunity "attack" -weird*')
     assert isinstance(hits, list)  # must not raise on FTS syntax characters
+
+
+def test_spell_slots_for_cleric(rules_db):
+    with RulesDB(rules_db) as db:
+        assert db.spell_slots_for("cleric", 1) == {1: 2}
+        assert db.spell_slots_for("cleric", 5) == {1: 4, 2: 3, 3: 2}
+        assert db.spell_slots_for("fighter", 5) == {}
+        assert db.spell_slots_for("cleric", 99) == {}
+
+
+def test_get_class_level(rules_db):
+    with RulesDB(rules_db) as db:
+        record = db.get_class_level("wizard", 3)
+        assert record is not None and record["prof_bonus"] == 2
+        assert db.get_class_level("wizard", 21) is None

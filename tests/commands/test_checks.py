@@ -240,7 +240,13 @@ def test_death_save_marks_combatant_defeated_in_active_combat(ctx):
     kira = ctx.store.get_character("Kira")
     ctx.store.conn.execute("UPDATE resources SET hp = 0 WHERE character_id = ?", (kira["id"],))
     ctx.store.conn.commit()
-    ctx.store.update_combat(active=1, combatants=[{"name": "Kira"}, {"name": "goblin-1"}])
+    ctx.store.update_combat(
+        active=1,
+        combatants=[
+            {"key": "Kira", "name": "Kira", "defeated": False},
+            {"key": "goblin-1", "name": "goblin-1"},
+        ],
+    )
     registry.execute("death_save", ctx, character="Kira", player_value=9)
     registry.execute("death_save", ctx, character="Kira", player_value=8)
     registry.execute("death_save", ctx, character="Kira", player_value=2)

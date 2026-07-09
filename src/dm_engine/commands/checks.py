@@ -187,7 +187,7 @@ def _mark_combatant_defeated(ctx: CommandContext, character: str) -> None:
     combatants = combat["combatants"]
     changed = False
     for combatant in combatants:
-        if combatant.get("name") == character:
+        if combatant.get("key") == character:
             combatant["defeated"] = True
             changed = True
     if changed:
@@ -207,7 +207,7 @@ def death_save(
         resources["hp"] > 0
         or death_saves["stable"]
         or death_saves["dead"]
-        or char["status"] in ("defeated", "dead")
+        or char["status"] != "active"
     ):
         return refuse(
             "death_save", f"{character} is not dying (0 hp, not yet stable or dead)"

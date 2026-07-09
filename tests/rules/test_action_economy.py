@@ -56,3 +56,8 @@ def test_dash_consumes_action_and_adds_speed():
 def test_dash_without_action_refused():
     spent = spend(new_turn(30), "action").budget
     assert dash(spent).ok is False
+
+
+def test_negative_speed_raises():
+    with pytest.raises(ValueError):
+        new_turn(-5)

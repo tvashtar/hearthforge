@@ -68,3 +68,8 @@ def test_unknown_damage_type_raises():
 def test_negative_damage_raises():
     with pytest.raises(ValueError):
         apply_mitigation(-1, "fire")
+
+
+def test_negative_reduction_raises():
+    with pytest.raises(ValueError):
+        apply_mitigation(5, "fire", reduction=-1)

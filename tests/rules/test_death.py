@@ -86,3 +86,15 @@ def test_damage_breaks_stability():
     outcome = apply_damage_while_dying(DeathSaveState(stable=True), 3, max_hp=20, critical=False)
     assert outcome.state.stable is False
     assert outcome.state.failures == 1
+
+
+def test_damage_while_dying_on_already_dead_raises():
+    with pytest.raises(ValueError):
+        apply_damage_while_dying(DeathSaveState(dead=True), 6, max_hp=20, critical=False)
+
+
+def test_damage_while_dying_rejects_negative_damage_and_bad_max_hp():
+    with pytest.raises(ValueError):
+        apply_damage_while_dying(DeathSaveState(), -1, max_hp=20, critical=False)
+    with pytest.raises(ValueError):
+        apply_damage_while_dying(DeathSaveState(), 6, max_hp=0, critical=False)

@@ -1,3 +1,5 @@
+import pytest
+
 from dm_engine.rules.dice import SeededDiceRoller
 from dm_engine.rules.initiative import roll_initiative
 
@@ -36,3 +38,8 @@ def test_player_value_flags_player_roll():
     assert by_id["kira"].roll.player_supplied is True
     assert by_id["kira"].total == 21
     assert by_id["goblin-1"].roll.player_supplied is False
+
+
+def test_empty_combatants_raises():
+    with pytest.raises(ValueError):
+        roll_initiative(SeededDiceRoller(1), [])

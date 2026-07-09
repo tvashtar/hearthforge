@@ -1,0 +1,109 @@
+"""Read API over rules.sqlite — the only way the engine reads reference data."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass
+from pathlib import Path
+
+from dm_engine.models.srd import MonsterRecord, SpellRecord
+
+DEFAULT_DB = Path("data/build/rules.sqlite")
+
+
+@dataclass
+class RuleHit:
+    source: str
+    heading_path: str
+    heading: str
+    snippet: str
+
+
+@dataclass
+class MonsterSummary:
+    slug: str
+    name: str
+    challenge_rating: float
+    xp: int
+
+
+@dataclass
+class SpellSummary:
+    slug: str
+    name: str
+    level: int
+    school: str
+
+
+class RulesDB:
+    def __init__(self, path: Path = DEFAULT_DB):
+        if not Path(path).exists():
+            raise FileNotFoundError(f"{path} not found — run `dm seed` first")
+        self._conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+
+    def __enter__(self) -> "RulesDB":
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._conn.close()
+
+    def lookup_rule(self, query: str, limit: int = 5) -> list[RuleHit]:
+        # Quote every term: user text must never hit FTS5 query syntax.
+        terms = [t for t in query.replace('"', " ").split() if t]
+        if not terms:
+            return []
+        fts_query = " ".join(f'"{t}"' for t in terms)
+        rows = self._conn.execute(
+            "SELECT source, heading_path, heading,"
+            " snippet(srd_text, 3, '[', ']', ' … ', 24)"
+            " FROM srd_text WHERE srd_text MATCH ? ORDER BY rank LIMIT ?",
+            (fts_query, limit),
+        ).fetchall()
+        return [RuleHit(*row) for row in rows]
+
+    def get_monster(self, slug: str) -> MonsterRecord | None:
+        row = self._conn.execute(
+            "SELECT data FROM monsters WHERE slug=?", (slug,)
+        ).fetchone()
+        return MonsterRecord.model_validate(json.loads(row[0])) if row else None
+
+    def search_monsters(
+        self,
+        max_cr: float | None = None,
+        type: str | None = None,
+        limit: int = 20,
+    ) -> list[MonsterSummary]:
+        clauses, params = [], []
+        if max_cr is not None:
+            clauses.append("challenge_rating <= ?")
+            params.append(max_cr)
+        if type is not None:
+            clauses.append("type = ?")
+            params.append(type)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT slug, name, challenge_rating, xp FROM monsters {where}"
+            " ORDER BY challenge_rating, name LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return [MonsterSummary(*row) for row in rows]
+
+    def get_spell(self, slug: str) -> SpellRecord | None:
+        row = self._conn.execute(
+            "SELECT data FROM spells WHERE slug=?", (slug,)
+        ).fetchone()
+        return SpellRecord.model_validate(json.loads(row[0])) if row else None
+
+    def search_spells(self, level: int | None = None, limit: int = 20) -> list[SpellSummary]:
+        clauses, params = [], []
+        if level is not None:
+            clauses.append("level = ?")
+            params.append(level)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        rows = self._conn.execute(
+            f"SELECT slug, name, level, school FROM spells {where}"
+            " ORDER BY level, name LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        return [SpellSummary(*row) for row in rows]

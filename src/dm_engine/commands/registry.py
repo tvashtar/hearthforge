@@ -113,7 +113,9 @@ def open_campaign_context(
 ) -> CommandContext:
     store = CampaignStore.open(campaigns_dir, slug)
     rules = RulesDB(rules_db_path)
-    normalize_characters(store, rules)
+    notes = normalize_characters(store, rules)
+    if notes:
+        sheets.write_party_sheets(store)
     meta = store.campaign_meta()
     if meta.get("rng_state") is not None:
         roller = RecordingRoller(meta["rng_seed"])

@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from dm_engine.commands import registry
@@ -161,3 +163,44 @@ def test_reopen_resumes_exact_rng_state_for_mixed_dice(tmp_path, rules_path):
     expected_next = expected_roller.roll("1d20").total
 
     assert actual_next == expected_next
+
+
+def test_open_campaign_context_refreshes_stale_sheets_after_migration(
+    tmp_path, rules_path
+):
+    """A pre-fix row's sheet on disk is stale (or, pre-Fix-1, crash-inducing).
+    Reopening the campaign must re-render it with normalized/tolerant data."""
+    campaigns_dir = tmp_path / "campaigns"
+    store = CampaignStore.create(
+        campaigns_dir, slug="legacy", name="Legacy", death_mode="narrative",
+        rng_seed=1, skeleton={"premise": "t"},
+    )
+    store.conn.execute(
+        "INSERT INTO characters (name, role, class_slug, race_slug, level,"
+        " abilities, max_hp, ac, speed, proficiencies, attacks, spells_known)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("Algarve", "pc", "rogue", "wood-elf", 1,
+         json.dumps({"str": 8, "dex": 18, "con": 12, "int": 11, "wis": 12, "cha": 10}),
+         9, 15, 35,
+         json.dumps({"saving_throws": ["dex", "int"], "skills": ["stealth"],
+                     "expertise": [], "tools": [], "languages": []}),
+         json.dumps([
+             {"name": "Void Lash", "attack_bonus": 9, "damage": "6d6+4",
+              "damage_type": "necrotic"},
+         ]),
+         json.dumps([])),
+    )
+    store.conn.execute(
+        "INSERT INTO resources (character_id, hp, hit_dice_remaining, spell_slots)"
+        " VALUES (1, 9, 1, '{}')",
+    )
+    store.conn.commit()
+    # No sheet file yet — this row predates the sheets feature entirely.
+    assert not (store.root / "sheets" / "algarve.md").exists()
+    store.close()
+
+    ctx = open_campaign_context(campaigns_dir, "legacy", rules_path)
+    sheet = (ctx.store.root / "sheets" / "algarve.md").read_text()
+    assert "◉ DEX" in sheet  # saves normalized and rendered
+    assert "Void Lash: (invalid legacy spec — refuses on use)" in sheet
+    ctx.store.close()

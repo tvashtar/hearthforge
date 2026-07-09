@@ -18,21 +18,32 @@ from dm_engine.state.store import CampaignStore
 _PROF_KEYS = ("saves", "skills", "expertise", "tools", "languages")
 
 
-def _normalize_proficiencies(char: dict, rules: RulesDB) -> dict | None:
+def _normalize_proficiencies(
+    char: dict, rules: RulesDB
+) -> tuple[dict | None, str | None]:
+    """Returns (normalized-or-None, note-or-None). The note flags a
+    character whose saves are missing and whose class can't be looked up —
+    partially-fixed and worth surfacing even when nothing else changed."""
     profs = dict(char["proficiencies"])
     if "saving_throws" in profs:
         profs.setdefault("saves", profs.pop("saving_throws"))
+    note = None
     if not profs.get("saves"):
         record = rules.get_class(char["class_slug"])
         if record:
             profs["saves"] = derive_saves(record)
+        else:
+            note = (
+                f"{char['name']}: could not derive saves — "
+                f"unknown class {char['class_slug']!r}"
+            )
     try:
         normalized = Proficiencies(
             **{k: profs.get(k, []) for k in _PROF_KEYS}
         ).model_dump()
     except ValidationError:
-        return None  # unfixable — leave for on-use refusals
-    return normalized if normalized != char["proficiencies"] else None
+        return None, note  # unfixable — leave for on-use refusals
+    return (normalized if normalized != char["proficiencies"] else None), note
 
 
 def _normalize_attacks(char: dict, rules: RulesDB) -> list[dict] | None:
@@ -67,7 +78,7 @@ def normalize_characters(store: CampaignStore, rules: RulesDB) -> list[str]:
         for cid in ids:
             char = store.get_character_by_id(cid)
             fields: dict = {}
-            new_profs = _normalize_proficiencies(char, rules)
+            new_profs, note = _normalize_proficiencies(char, rules)
             if new_profs is not None:
                 fields["proficiencies"] = new_profs
             new_attacks = _normalize_attacks(char, rules)
@@ -78,4 +89,21 @@ def normalize_characters(store: CampaignStore, rules: RulesDB) -> list[str]:
                 changes.append(
                     f"{char['name']}: normalized {', '.join(sorted(fields))}"
                 )
+            if note:
+                changes.append(note)
+        if changes:
+            store.append_event(
+                command="migrate_normalize",
+                inputs={},
+                result={
+                    "ok": True,
+                    "command": "migrate_normalize",
+                    "refusal": None,
+                    "digest": "; ".join(changes),
+                    "data": {"notes": changes},
+                    "gm_only": False,
+                    "event_ids": [],
+                },
+                rolls=[],
+            )
     return changes

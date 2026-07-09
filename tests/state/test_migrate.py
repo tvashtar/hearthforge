@@ -70,6 +70,30 @@ def test_normalizer_is_idempotent(old_campaign, rules_path):
     assert normalize_characters(old_campaign, rules) == []
 
 
+def test_normalizer_logs_an_audit_event_when_it_fixes_rows(old_campaign, rules_path):
+    rules = RulesDB(rules_path)
+    before = old_campaign.event_count()
+    changes = normalize_characters(old_campaign, rules)
+    assert changes
+    assert old_campaign.event_count() == before + 1
+    row = old_campaign.conn.execute(
+        "SELECT command, result FROM event_log ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row["command"] == "migrate_normalize"
+    result = json.loads(row["result"])
+    assert result["ok"] is True
+    assert result["data"]["notes"] == changes
+
+
+def test_normalizer_second_run_adds_no_event(old_campaign, rules_path):
+    rules = RulesDB(rules_path)
+    normalize_characters(old_campaign, rules)
+    before = old_campaign.event_count()
+    changes = normalize_characters(old_campaign, rules)
+    assert changes == []
+    assert old_campaign.event_count() == before
+
+
 def test_normalizer_noop_on_valid_rows(tmp_path, rules_path):
     store = CampaignStore.create(
         tmp_path / "c", slug="new", name="N", death_mode="narrative",

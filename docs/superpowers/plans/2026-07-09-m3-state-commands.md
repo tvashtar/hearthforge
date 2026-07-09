@@ -1762,14 +1762,14 @@ def test_long_rest_restores_everything_and_advances_clock(ctx):
 
 def test_short_rest_spends_hit_dice_with_player_values(ctx):
     kira = ctx.store.get_character("Kira")
-    ctx.store.conn.execute("UPDATE resources SET hp = 4 WHERE character_id = ?",
+    ctx.store.conn.execute("UPDATE resources SET hp = 1 WHERE character_id = ?",
                            (kira["id"],))
     ctx.store.conn.commit()
     result = registry.execute("rest", ctx, kind="short", hit_dice={"Kira": 1},
                               player_hit_die_values=[8])
     assert result.ok
     res = ctx.store.get_resources(kira["id"])
-    assert res["hp"] == 4 + 8 + 2  # roll 8 + CON 2
+    assert res["hp"] == 1 + 8 + 2  # roll 8 + CON 2, within max_hp 12
     assert res["hit_dice_remaining"] == 0
 
 

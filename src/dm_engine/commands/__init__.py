@@ -1,3 +1,3 @@
 """Command registration: importing this package registers every command."""
 
-from dm_engine.commands import registry  # noqa: F401
+from dm_engine.commands import campaign, registry, world  # noqa: F401

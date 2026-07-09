@@ -82,7 +82,7 @@ class CommandContext:
         self.rules = rules
 
 
-def execute(name: str, ctx: CommandContext, **kwargs) -> CommandResult:
+def execute(name: str, ctx: CommandContext, /, **kwargs) -> CommandResult:
     handler = _COMMANDS.get(name)
     ctx.roller.begin_capture()
     with ctx.store.transaction():

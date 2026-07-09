@@ -119,6 +119,18 @@ def test_campaign_lifecycle(tmp_path, rules_path):
         slots_after_cast = ctx.store.get_resources(aldric["id"])["spell_slots"]["1"]
         assert slots_after_cast["remaining"] == slots_max - 1  # slot consumed
 
+        # --- short rest: spend one of Kira's hit dice so the long-rest regain
+        # assertion below is exercised against a genuinely depleted pool ------
+        kira_hit_dice_full = ctx.store.get_resources(kira["id"])["hit_dice_remaining"]
+        assert kira_hit_dice_full == kira["level"]  # 2/2 for a fresh L2 fighter
+        short = _run(ctx, "rest", kind="short", hit_dice={"Kira": 1},
+                     player_hit_die_values=[6])
+        short_healed = short.data["per_character"][0]["healed"]
+        assert short_healed >= 0  # exact roll varies; only bound it here
+        kira_res_after_short = ctx.store.get_resources(kira["id"])
+        assert kira_res_after_short["hit_dice_remaining"] == kira_hit_dice_full - 1
+        assert kira_res_after_short["hp"] <= kira["max_hp"]  # bounded, not exact
+
         # --- long rest: slots and hit dice restored (RAW), HP topped off -----
         rest = _run(ctx, "rest", kind="long")
         assert rest.data["kind"] == "long"
@@ -126,7 +138,13 @@ def test_campaign_lifecycle(tmp_path, rules_path):
         assert aldric_res["spell_slots"]["1"]["remaining"] == slots_max  # restored
         # RAW: regain max(1, total // 2) hit dice, capped at the pool total.
         assert aldric_res["hit_dice_remaining"] == aldric["level"]  # L2 pool full again
-        assert ctx.store.get_resources(kira["id"])["hp"] == 20  # HP restored to max
+        kira_res_after_long = ctx.store.get_resources(kira["id"])
+        assert kira_res_after_long["hit_dice_remaining"] == kira_hit_dice_full  # 1 -> 2
+        kira_rest_entry = next(
+            c for c in rest.data["per_character"] if c["name"] == "Kira"
+        )
+        assert kira_rest_entry["hit_dice_regained"] >= 1  # RAW regain actually happened
+        assert kira_res_after_long["hp"] == 20  # HP restored to max
 
         # (sheet-reflects-mutation #3) the cleric's sheet shows full slots again.
         assert "Level 1: 3 / 3" in _aldric_sheet(ctx)

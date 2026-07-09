@@ -142,10 +142,10 @@ git commit -m "feat: scaffold dm-engine package with CLI"
 
 **Files:**
 - Create: `scripts/sync_srd.py`, `data/srd/ATTRIBUTION.md`
-- Creates at runtime (committed after running): `data/srd/text/*.md`, `data/srd/structured/5e-SRD-*.json`
+- Creates at runtime (committed after running): `data/srd/2014/text/*.md`, `data/srd/2014/structured/5e-SRD-*.json`
 
 **Interfaces:**
-- Produces: vendored files at the FC-5 paths. Later tasks read `data/srd/structured/5e-SRD-Monsters.json` etc. and `data/srd/text/*.md`.
+- Produces: vendored files at the FC-5 paths. Later tasks read `data/srd/2014/structured/5e-SRD-Monsters.json` etc. and `data/srd/2014/text/*.md`.
 
 - [ ] **Step 1: Write scripts/sync_srd.py**
 
@@ -587,7 +587,7 @@ Run: `uv run python -c "
 from pathlib import Path
 from dm_engine.content.markdown_sections import parse_sections
 total = 0
-for f in sorted(Path('data/srd/text').glob('*.md')):
+for f in sorted(Path('data/srd/2014/text').glob('*.md')):
     total += len(parse_sections(f.read_text(), f.name))
 print('sections:', total)
 "`

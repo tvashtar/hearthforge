@@ -66,7 +66,7 @@ llm-dungeon-master/
 └── tests/
 ```
 
-**SRD ingestion strategy.** The `../dnd-5e-srd` fork is *vendored, not moved*: `scripts/sync_srd.py` copies its `markdown/` directory into `data/srd/text/` and fetches the 5e-bits JSON into `data/srd/structured/`. Vendored files are committed so the repo is self-contained; upstream fixes are one script run away. Rationale: the fork's json/yaml are prose-in-a-heading-tree (stat blocks are markdown strings), so it serves as the DM's rules-reference library; 5e-bits provides the same SRD content as typed, queryable fields for the mechanics engine. Same CC-BY license for both.
+**SRD ingestion strategy.** The `../dnd-5e-srd` fork is *vendored, not moved*: `scripts/sync_srd.py` copies its `markdown/` directory into `data/srd/2014/text/` and fetches the 5e-bits JSON into `data/srd/2014/structured/`. Vendored files are committed so the repo is self-contained; upstream fixes are one script run away. Rationale: the fork's json/yaml are prose-in-a-heading-tree (stat blocks are markdown strings), so it serves as the DM's rules-reference library; 5e-bits provides the same SRD content as typed, queryable fields for the mechanics engine. Same CC-BY license for both.
 
 ## 3. Data layer
 

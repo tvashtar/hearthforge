@@ -46,10 +46,8 @@ def test_campaign_lifecycle(tmp_path, rules_path):
             # point-buy-legal spread (every score in 8..15); CON 14 -> +2.
             abilities={"str": 15, "dex": 13, "con": 14, "int": 10, "wis": 12, "cha": 8},
             ac=16,
-            proficiencies={"skills": ["athletics", "intimidation"], "saves": ["str", "con"]},
-            attacks=[{"name": "longsword", "ranged": False, "range_ft": 5,
-                      "long_range_ft": None, "damage": "1d8", "damage_type": "slashing",
-                      "ability": "str", "proficient": True}],
+            proficiencies={"skills": ["athletics", "intimidation"]},
+            attacks=[{"weapon": "longsword", "name": "longsword"}],
         )
         _run(
             ctx, "create_character", name="Brother Aldric", role="companion",
@@ -57,10 +55,8 @@ def test_campaign_lifecycle(tmp_path, rules_path):
             # standard array 15/14/13/12/10/8.
             abilities={"str": 12, "dex": 13, "con": 14, "int": 10, "wis": 15, "cha": 8},
             ac=18,
-            proficiencies={"skills": ["medicine", "religion"], "saves": ["wis", "cha"]},
-            attacks=[{"name": "mace", "ranged": False, "range_ft": 5,
-                      "long_range_ft": None, "damage": "1d6", "damage_type": "bludgeoning",
-                      "ability": "str", "proficient": True}],
+            proficiencies={"skills": ["medicine", "religion"]},
+            attacks=[{"weapon": "mace", "name": "mace"}],
             spells_known=["cure-wounds", "bless"],
         )
 

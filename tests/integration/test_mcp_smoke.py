@@ -50,7 +50,7 @@ async def test_mcp_smoke(tmp_path, rules_path):
                 "abilities": {"str": 16, "dex": 14, "con": 14, "int": 10,
                               "wis": 12, "cha": 8},
                 "ac": 16,
-                "proficiencies": {"skills": ["athletics"], "saves": ["str", "con"]},
+                "proficiencies": {"skills": ["athletics"]},
                 "attacks": [],
             })
             assert json.loads(result.content[0].text)["ok"] is True

@@ -101,14 +101,10 @@ def test_goblin_ambush_gate(tmp_path, rules_path):
             abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12,
                        "cha": 8},
             ac=16,
-            proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
+            proficiencies={"skills": ["athletics"]},
             attacks=[
-                {"name": "longsword", "ranged": False, "range_ft": 5,
-                 "long_range_ft": None, "damage": "1d8",
-                 "damage_type": "slashing", "ability": "str", "proficient": True},
-                {"name": "dagger", "ranged": False, "range_ft": 5,
-                 "long_range_ft": None, "damage": "1d4",
-                 "damage_type": "piercing", "ability": "str", "proficient": True},
+                {"weapon": "longsword", "name": "longsword"},
+                {"weapon": "dagger", "name": "dagger"},
             ],
         ).ok
 
@@ -118,14 +114,10 @@ def test_goblin_ambush_gate(tmp_path, rules_path):
             abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15,
                        "cha": 12},
             ac=18,
-            proficiencies={"skills": ["medicine"], "saves": ["wis", "cha"]},
+            proficiencies={"skills": ["medicine"]},
             attacks=[
-                {"name": "mace", "ranged": False, "range_ft": 5,
-                 "long_range_ft": None, "damage": "1d6",
-                 "damage_type": "bludgeoning", "ability": "str", "proficient": True},
-                {"name": "shortbow", "ranged": True, "range_ft": 80,
-                 "long_range_ft": 320, "damage": "1d6",
-                 "damage_type": "piercing", "ability": "dex", "proficient": True},
+                {"weapon": "mace", "name": "mace"},
+                {"weapon": "shortbow", "name": "shortbow"},
             ],
             spells_known=["cure-wounds", "guiding-bolt", "sacred-flame", "bless"],
         ).ok

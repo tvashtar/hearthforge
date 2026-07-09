@@ -101,10 +101,8 @@ def test_headless_multi_round_combat(tmp_path, rules_path):
             class_slug="fighter", race_slug="human",
             abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
             ac=16,
-            proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
-            attacks=[{"name": "longsword", "ranged": False, "range_ft": 5,
-                      "long_range_ft": None, "damage": "1d8",
-                      "damage_type": "slashing", "ability": "str", "proficient": True}],
+            proficiencies={"skills": ["athletics"]},
+            attacks=[{"weapon": "longsword", "name": "longsword"}],
         ).ok
 
         assert run(
@@ -112,10 +110,8 @@ def test_headless_multi_round_combat(tmp_path, rules_path):
             class_slug="cleric", race_slug="hill-dwarf",
             abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15, "cha": 12},
             ac=18,
-            proficiencies={"skills": ["medicine"], "saves": ["wis", "cha"]},
-            attacks=[{"name": "mace", "ranged": False, "range_ft": 5,
-                      "long_range_ft": None, "damage": "1d6",
-                      "damage_type": "bludgeoning", "ability": "str", "proficient": True}],
+            proficiencies={"skills": ["medicine"]},
+            attacks=[{"weapon": "mace", "name": "mace"}],
             spells_known=["cure-wounds", "guiding-bolt", "sacred-flame", "bless"],
         ).ok
 

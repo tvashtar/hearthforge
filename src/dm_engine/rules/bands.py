@@ -56,18 +56,13 @@ def weapon_range_legality(
 ) -> RangeLegality:
     """A weapon reaches a band when the band's distance fits its range.
 
-    Bands are a coarse abstraction, not exact geometry: any ranged/thrown
-    attack is always at normal range against engaged or near targets,
-    regardless of the weapon's stated range in feet (a target described as
-    "near" may be as close as just past engaged). Far and distant depend on
-    the literal range/long-range comparison.
-
-    Long range imposes disadvantage, as does making a ranged attack while
-    a hostile is within 5 ft (attacker_engaged).
+    Bands are representative distances (5/30/60/120 ft), compared literally
+    against weapon range — the same convention movement costs use. Long
+    range imposes disadvantage, as does making a ranged attack while a
+    hostile is within 5 ft (attacker_engaged).
     """
     d = BAND_RANGE_FT[distance]
-    normal = d <= range_ft or (ranged and band_index(distance) <= band_index("near"))
-    if normal:
+    if d <= range_ft:
         if ranged and attacker_engaged:
             return "disadvantage"
         return "normal"

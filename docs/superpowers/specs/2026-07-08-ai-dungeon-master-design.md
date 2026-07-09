@@ -125,6 +125,8 @@ Command families (~25 commands in v1):
 - **Resources:** `use_item`, `rest` (short/long), inventory operations.
 - **World writes:** `create_npc`, `create_location`, `update_quest` — how the DM's improvisations become persistent facts.
 - **Queries:** `get_character_sheet`, `get_scene_state`, `lookup_rule`, `lookup_monster`, `lookup_spell`.
+
+**Character sheets — materialized markdown views.** The engine (never the LLM) renders each party member's sheet to `campaigns/<slug>/sheets/<character>.md` — a pure function of DB state, re-rendered automatically after any command that mutates that character (HP, slots, inventory, conditions, XP, level). In Phase 1 the player keeps the file open in their editor and it live-updates as the DM does bookkeeping through commands; `dm sheet <character>` prints it on demand, and `get_character_sheet` returns the structured data plus the rendered markdown. Sheets contain player-visible information only. The Phase 3 UI replaces the renderer, not the data.
 - **Sessions:** `end_session` (DM writes a persisted recap + open-thread updates); the DM also silently checkpoints a mini-recap every ~20 events so an abrupt exit (crash, compaction, closed laptop) still resumes with fresh narrative memory.
 - **Escape hatch:** `dm_ruling` — for corner cases the engine doesn't model; full read/write power, requires a written rationale, prominently marked in `event_log`, reviewable via a `dm audit` CLI listing all rulings. RAW coverage gaps must never block play.
 

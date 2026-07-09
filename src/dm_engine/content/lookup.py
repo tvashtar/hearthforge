@@ -127,6 +127,12 @@ class RulesDB:
         ).fetchone()
         return json.loads(row[0]) if row else None
 
+    def get_equipment(self, slug: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT data FROM equipment WHERE slug=?", (slug,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
     def spell_slots_for(self, class_slug: str, level: int) -> dict[int, int]:
         """Return {slot_level: count} for slot levels with count > 0.
 

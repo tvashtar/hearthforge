@@ -137,7 +137,8 @@ def cmd(
     """Execute one registry command against a campaign and print its result.
 
     Exit code 0 even for refusals (a refusal is a normal result); exit 1
-    only for an unknown campaign or an unreadable rules database.
+    for an unknown campaign, an unreadable rules database, or a malformed
+    --json payload.
     """
     try:
         kwargs = json.loads(json_kwargs)

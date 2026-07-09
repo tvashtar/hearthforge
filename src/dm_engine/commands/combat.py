@@ -121,6 +121,8 @@ def start_combat(
             resolved.append((slug, band, record))
 
     active_party = [c for c in ctx.store.party() if c["status"] == "active"]
+    if not active_party:
+        return refuse("start_combat", "no active party members to fight")
 
     # Build combatants (unordered); characters first, then monster instances.
     combatants: list[Combatant] = []

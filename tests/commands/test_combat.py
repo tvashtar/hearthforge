@@ -121,6 +121,15 @@ def test_start_combat_invalid_pc_initiative_refused(ctx):
     assert _start(ctx, pc_initiative=21).ok is False
 
 
+def test_start_combat_no_active_party_refused(ctx):
+    for member in ctx.store.party():
+        ctx.store.update_character(member["id"], status="defeated")
+    ctx.store.conn.commit()
+    result = _start(ctx)
+    assert result.ok is False
+    assert "party" in result.refusal
+
+
 def test_start_combat_mutates_combat_state_and_logs(ctx):
     _start(ctx)
     combat = ctx.store.combat()

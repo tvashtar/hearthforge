@@ -90,7 +90,15 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
     lines.append(f"- Exhaustion: {res['exhaustion']}")
     concentration = res.get("concentration")
     if concentration:
-        lines.append(f"- Concentrating on: {concentration}")
+        if isinstance(concentration, dict):
+            spell = concentration.get("spell", "unknown")
+            duration = concentration.get("duration")
+            conc_line = f"- Concentrating on: {spell}"
+            if duration:
+                conc_line += f" ({duration})"
+            lines.append(conc_line)
+        else:
+            lines.append(f"- Concentrating on: {concentration}")
     lines.append("")
 
     # Death saves — only rendered while dying / with recorded saves

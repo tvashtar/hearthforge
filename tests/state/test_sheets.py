@@ -63,6 +63,22 @@ def test_sheet_renders_core_fields(ctx):
     assert len(files) == 1  # registry hook already materialized it
 
 
+def test_sheet_renders_signed_zero_damage_mod(ctx):
+    # STR 10 -> mod 0; the resolver notates "+0" and the sheet must match.
+    registry.execute(
+        "create_character", ctx, name="Kira", role="pc", class_slug="fighter",
+        race_slug="human",
+        abilities={"str": 10, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"custom": {
+            "name": "Plain Fist", "ability": "str", "damage": "1d6",
+            "damage_type": "bludgeoning", "ranged": False, "range_ft": 5,
+        }}],
+    )
+    md = render_character_sheet(ctx.store, ctx.store.get_character("Kira")["id"])
+    assert "1d6+0 bludgeoning" in md
+
+
 def test_sheet_renders_degraded_line_for_unfixable_legacy_attack(ctx):
     registry.execute(
         "create_character", ctx, name="Kira", role="pc", class_slug="fighter",

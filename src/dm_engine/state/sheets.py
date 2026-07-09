@@ -186,7 +186,7 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
                 continue
             to_hit = attack_to_hit(atk, abilities, level)
             dmg_mod = attack_damage_mod(atk, abilities)
-            damage = atk["damage"] + (_fmt_mod(dmg_mod) if dmg_mod else "")
+            damage = f"{atk['damage']}{_fmt_mod(dmg_mod)}"
             if atk.get("ranged") and atk.get("long_range_ft"):
                 annot = f" ({atk['range_ft']}/{atk['long_range_ft']})"
             elif "finesse" in atk.get("properties", []):

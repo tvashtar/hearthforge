@@ -3,6 +3,7 @@ import json
 import pytest
 
 from dm_engine.commands import registry
+from dm_engine.rules.checks import ability_modifier
 
 pytestmark = pytest.mark.usefixtures("party")  # implementer adds a fixture creating Kira (PC) + Brother Aldric (companion) via registry
 
@@ -284,3 +285,47 @@ def test_death_save_player_value_refused_for_companion(ctx):
     ctx.store.conn.commit()
     result = registry.execute("death_save", ctx, character="Brother Aldric", player_value=10)
     assert result.ok is False and "player" in result.refusal.lower()
+
+
+# -- own tests / binding tests: monster skill_check --------------------------
+
+def test_monster_stealth_check_gm_only(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("skill_check", ctx, character="goblin-1",
+                              skill="stealth", dc=12, gm_only=True)
+    assert result.ok, result.refusal
+    assert result.gm_only is True
+    assert result.data["modifier"] == 6  # goblin Stealth +6 from the SRD record
+    row = ctx.store.conn.execute(
+        "SELECT rolls FROM event_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert '"gm_only": true' in row["rolls"]
+
+
+def test_monster_check_refuses_player_value(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("skill_check", ctx, character="goblin-1",
+                              skill="stealth", dc=12, player_value=15)
+    assert result.ok is False
+
+
+def test_monster_check_no_matching_proficiency_uses_ability_modifier(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("skill_check", ctx, character="goblin-1",
+                              skill="athletics", dc=10, gm_only=True)
+    assert result.ok, result.refusal
+    assert result.data["modifier"] == ability_modifier(8)  # goblin STR 8 -> -1
+
+
+def test_skill_check_still_refuses_unknown_name_with_active_combat(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("skill_check", ctx, character="Nobody",
+                              skill="stealth", dc=12)
+    assert result.ok is False and "nobody" in result.refusal.lower()

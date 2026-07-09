@@ -327,3 +327,26 @@ def test_skill_check_still_refuses_unknown_name_with_active_combat(ctx):
     result = registry.execute("skill_check", ctx, character="Nobody",
                               skill="stealth", dc=12)
     assert result.ok is False and "nobody" in result.refusal.lower()
+
+
+def test_skill_check_expertise_doubles_proficiency(ctx):
+    # Mark Kira as dead to allow creating Sable as the PC (party() only includes active/defeated)
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_character(kira["id"], status="dead")
+
+    registry.execute(
+        "create_character", ctx, name="Sable", role="pc",
+        class_slug="rogue", race_slug="wood-elf",
+        abilities={"str": 8, "dex": 18, "con": 12, "int": 11, "wis": 12, "cha": 10},
+        ac=15, speed=35,
+        proficiencies={"skills": ["stealth", "acrobatics"], "expertise": ["stealth"]},
+        attacks=[{"weapon": "shortsword"}],
+    )
+    # player_value pins the d20 so the assertion is pure modifier math
+    expert = registry.execute("skill_check", ctx, character="Sable",
+                              skill="stealth", dc=10, player_value=10)
+    assert expert.data["modifier"] == 8          # +4 dex +2 prof ×2
+    assert expert.data["total"] == 18
+    merely_proficient = registry.execute("skill_check", ctx, character="Sable",
+                                         skill="acrobatics", dc=10, player_value=10)
+    assert merely_proficient.data["modifier"] == 6

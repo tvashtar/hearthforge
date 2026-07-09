@@ -11,6 +11,7 @@ from __future__ import annotations
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import SKILL_ABILITIES
+from dm_engine.rules.character_build import skill_modifier
 from dm_engine.rules.checks import (
     ability_modifier,
     combine_advantage,
@@ -146,10 +147,7 @@ def skill_check(
     if reason:
         return refuse("skill_check", reason)
 
-    ability = SKILL_ABILITIES[skill]
-    modifier = ability_modifier(char["abilities"][ability])
-    if skill in char["proficiencies"].get("skills", []):
-        modifier += proficiency_bonus(char["level"])
+    modifier = skill_modifier(skill, char["proficiencies"], char["abilities"], char["level"])
     mode = combine_advantage(advantage, disadvantage)
 
     check = resolve_check(

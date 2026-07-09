@@ -190,12 +190,16 @@ def sync_text(fork_path: Path) -> int:
 
 def _copy_bits_json(repo: Path) -> int:
     candidates = sorted(repo.glob("src/**/5e-SRD-*.json"))
-    # Prefer the 2014 SRD dataset if the repo splits by edition.
-    files_2014 = [p for p in candidates if "2014" in p.parts]
-    files = files_2014 or candidates
-    for f in files:
+    # The repo splits by edition (2014/, 2024/) and locale (en/, fr-FR/, pt-BR/, ru/).
+    # Filenames repeat across locales, so narrow before copying or locales clobber
+    # each other. Verified layout as of 2026-07: src/2014/en/5e-SRD-*.json (25 files).
+    for segment in ("2014", "en"):
+        narrowed = [p for p in candidates if segment in p.parts]
+        if narrowed:
+            candidates = narrowed
+    for f in candidates:
         shutil.copy2(f, STRUCTURED_DEST / f.name)
-    return len(files)
+    return len(candidates)
 
 
 def sync_structured(bits_path: Path) -> int:
@@ -247,7 +251,7 @@ Both are re-distributions of the same SRD 5.1 content. Re-run
 - [ ] **Step 3: Run the script and inspect**
 
 Run: `uv run python scripts/sync_srd.py`
-Expected: `vendored 17 markdown files ...` and roughly 25 JSON files (must include `5e-SRD-Monsters.json`, `5e-SRD-Spells.json`, `5e-SRD-Classes.json`, `5e-SRD-Races.json`, `5e-SRD-Equipment.json`, `5e-SRD-Magic-Items.json`, `5e-SRD-Conditions.json`, `5e-SRD-Features.json`).
+Expected: `vendored 17 markdown files ...` and 25 JSON files (must include `5e-SRD-Monsters.json`, `5e-SRD-Spells.json`, `5e-SRD-Classes.json`, `5e-SRD-Races.json`, `5e-SRD-Equipment.json`, `5e-SRD-Magic-Items.json`, `5e-SRD-Conditions.json`, `5e-SRD-Features.json`).
 Sanity check: `python3 -c "import json; d=json.load(open('data/srd/structured/5e-SRD-Monsters.json')); print(len(d))"` → 300+.
 
 - [ ] **Step 4: Commit the script and vendored data**

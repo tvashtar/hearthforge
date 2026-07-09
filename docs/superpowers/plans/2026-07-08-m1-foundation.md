@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Branch: all M1 work on `feat/m1-foundation`; never commit to `main`; never push.
-- Storage layout is frozen (roadmap FC-5): vendored sources in `data/srd/text/` and `data/srd/structured/` (committed); built DB at `data/build/rules.sqlite` (gitignored); `campaigns/` gitignored.
+- Storage layout is frozen (roadmap FC-5): vendored sources are edition-tagged — `data/srd/2014/text/` and `data/srd/2014/structured/` (committed); built DB at `data/build/rules.sqlite` (gitignored) with a `meta` table recording `edition=2014`, `srd_version=5.1`; `campaigns/` gitignored. The 2024 ruleset is a deliberate future migration (5e-bits' 2024 data is incomplete) — tag the data, don't build dual-edition logic.
 - 5e-bits record `index` field is the canonical slug everywhere (e.g. `"aboleth"`, `"magic-missile"`).
 - The fork's markdown uses setext headings (`===` h1, `---` h2) AND ATX (`###`+) — the section parser must handle both.
 - Conventional commits, first line under 50 chars.
@@ -171,8 +171,8 @@ import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-TEXT_DEST = REPO_ROOT / "data" / "srd" / "text"
-STRUCTURED_DEST = REPO_ROOT / "data" / "srd" / "structured"
+TEXT_DEST = REPO_ROOT / "data" / "srd" / "2014" / "text"
+STRUCTURED_DEST = REPO_ROOT / "data" / "srd" / "2014" / "structured"
 FIVE_E_BITS_URL = "https://github.com/5e-bits/5e-database"
 
 
@@ -239,20 +239,22 @@ Document (SRD 5.1), © Wizards of the Coast, licensed under the Creative
 Commons Attribution 4.0 International License (CC-BY-4.0):
 https://creativecommons.org/licenses/by/4.0/legalcode
 
-Sources:
-- `text/` — markdown conversion from https://github.com/tvashtar/dnd-5e-srd
+Sources (edition-tagged; currently the 2014 rules / SRD 5.1):
+- `2014/text/` — markdown conversion from https://github.com/tvashtar/dnd-5e-srd
   (fork of https://github.com/vitusventure/5thSRD)
-- `structured/` — JSON records from https://github.com/5e-bits/5e-database
+- `2014/structured/` — JSON records from https://github.com/5e-bits/5e-database
+  (`src/2014/en/`)
 
 Both are re-distributions of the same SRD 5.1 content. Re-run
-`scripts/sync_srd.py` to refresh from upstream.
+`scripts/sync_srd.py` to refresh from upstream. A future migration to the
+2024 rules (SRD 5.2) adds a `2024/` directory beside `2014/`.
 ```
 
 - [ ] **Step 3: Run the script and inspect**
 
 Run: `uv run python scripts/sync_srd.py`
 Expected: `vendored 17 markdown files ...` and 25 JSON files (must include `5e-SRD-Monsters.json`, `5e-SRD-Spells.json`, `5e-SRD-Classes.json`, `5e-SRD-Races.json`, `5e-SRD-Equipment.json`, `5e-SRD-Magic-Items.json`, `5e-SRD-Conditions.json`, `5e-SRD-Features.json`).
-Sanity check: `python3 -c "import json; d=json.load(open('data/srd/structured/5e-SRD-Monsters.json')); print(len(d))"` → 300+.
+Sanity check: `python3 -c "import json; d=json.load(open('data/srd/2014/structured/5e-SRD-Monsters.json')); print(len(d))"` → 300+.
 
 - [ ] **Step 4: Commit the script and vendored data**
 
@@ -281,7 +283,7 @@ from pathlib import Path
 
 from dm_engine.models.srd import MonsterRecord, SpellRecord
 
-STRUCTURED = Path(__file__).parent.parent / "data" / "srd" / "structured"
+STRUCTURED = Path(__file__).parent.parent / "data" / "srd" / "2014" / "structured"
 
 
 def _load(filename: str) -> list[dict]:
@@ -627,8 +629,8 @@ REPO_ROOT = Path(__file__).parent.parent
 def rules_db(tmp_path_factory) -> Path:
     dest = tmp_path_factory.mktemp("rules") / "rules.sqlite"
     build_rules_db(
-        structured_dir=REPO_ROOT / "data" / "srd" / "structured",
-        text_dir=REPO_ROOT / "data" / "srd" / "text",
+        structured_dir=REPO_ROOT / "data" / "srd" / "2014" / "structured",
+        text_dir=REPO_ROOT / "data" / "srd" / "2014" / "text",
         dest=dest,
     )
     return dest
@@ -684,6 +686,13 @@ def test_cr_range_query(rules_db):
         "SELECT COUNT(*) FROM monsters WHERE challenge_rating <= 0.25 AND type='humanoid'"
     ).fetchone()
     assert n >= 5  # goblins, kobolds, bandits, cultists, ...
+
+
+def test_meta_records_edition(rules_db):
+    conn = sqlite3.connect(rules_db)
+    meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+    assert meta["edition"] == "2014"
+    assert meta["srd_version"] == "5.1"
 
 
 def test_fts_index_finds_rules_text(rules_db):
@@ -743,7 +752,10 @@ CREATE TABLE features (
     slug TEXT PRIMARY KEY, name TEXT NOT NULL, class_slug TEXT, level INTEGER, data TEXT NOT NULL
 );
 CREATE VIRTUAL TABLE srd_text USING fts5(source, heading_path, heading, body);
+CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
+
+EDITION_META = [("edition", "2014"), ("srd_version", "5.1")]
 
 
 def _records(structured_dir: Path, filename: str) -> list[dict]:
@@ -755,6 +767,7 @@ def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str
     dest.unlink(missing_ok=True)
     conn = sqlite3.connect(dest)
     conn.executescript(SCHEMA)
+    conn.executemany("INSERT INTO meta VALUES (?,?)", EDITION_META)
 
     for raw in _records(structured_dir, "5e-SRD-Monsters.json"):
         m = MonsterRecord.model_validate(raw)
@@ -824,7 +837,7 @@ def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str
 - [ ] **Step 5: Run tests to verify they pass**
 
 Run: `uv run pytest tests/test_seed.py -v`
-Expected: PASS (5 tests). If a count assertion fails, inspect the actual vendored JSON before touching the assertion — upstream counts drift slightly; the `>` floors are the contract, the `==` values (12 classes, 15 conditions, 9 races) are RAW facts and must hold.
+Expected: PASS (6 tests). If a count assertion fails, inspect the actual vendored JSON before touching the assertion — upstream counts drift slightly; the `>` floors are the contract, the `==` values (12 classes, 15 conditions, 9 races) are RAW facts and must hold.
 
 - [ ] **Step 6: Commit**
 
@@ -1062,8 +1075,8 @@ def seed(dest: Path = typer.Option(DEFAULT_DB, help="Output path for rules.sqlit
     from dm_engine.content.seed import build_rules_db
 
     counts = build_rules_db(
-        structured_dir=REPO_ROOT / "data" / "srd" / "structured",
-        text_dir=REPO_ROOT / "data" / "srd" / "text",
+        structured_dir=REPO_ROOT / "data" / "srd" / "2014" / "structured",
+        text_dir=REPO_ROOT / "data" / "srd" / "2014" / "text",
         dest=dest,
     )
     for table, n in counts.items():

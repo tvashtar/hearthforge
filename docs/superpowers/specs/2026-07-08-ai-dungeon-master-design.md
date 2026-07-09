@@ -13,6 +13,7 @@
 | Party | 1 player character + 1–3 AI-run companions (standard encounter balance) |
 | DM runtime | Engine-first hybrid: Claude Code as DM brain (Phase 1), API-driven loop (Phase 2), UI (Phase 3) |
 | SRD strategy | Vendor both: `dnd-5e-srd` fork markdown (rules prose) + `5e-bits/5e-database` JSON (structured data) |
+| Ruleset edition | 2014 rules (SRD 5.1) now — the only edition with complete structured data (5e-bits' 2024 set lacks spells and most monsters as of 2026-07). Layout and DB are edition-tagged so migrating to 2024/SRD 5.2 is a re-vendor + re-seed + verify, not a redesign |
 | Session model | Resumable anytime; autosave every command; DB is always the truth |
 | Level range | Levels 1–5 hand-verified at launch; schema and engine designed for 1–20 |
 | LLM↔engine boundary | Command-resolution engine (Option A): LLM issues commands, engine validates/rolls/persists/returns |
@@ -55,9 +56,10 @@ llm-dungeon-master/
 │   ├── mcp/                  # MCP server exposing commands (Phase 1)
 │   └── cli/                  # typer CLI: dm new, dm resume, dm cmd …
 ├── data/srd/
-│   ├── text/                 # vendored markdown from the dnd-5e-srd fork
-│   ├── structured/           # vendored 5e-bits/5e-database JSON
+│   ├── 2014/text/            # vendored markdown from the dnd-5e-srd fork (SRD 5.1)
+│   ├── 2014/structured/      # vendored 5e-bits/5e-database JSON (SRD 5.1)
 │   └── ATTRIBUTION.md        # CC-BY attribution for both sources
+│                             # (a future data/srd/2024/ slots in beside it)
 ├── campaigns/                # per-campaign SQLite DBs + snapshots (gitignored)
 ├── scripts/sync_srd.py       # re-vendor both SRD sources from upstream
 ├── .claude/skills/dm-session/ # DM persona skill (Phase 1)
@@ -70,7 +72,7 @@ llm-dungeon-master/
 
 Two SQLite databases with different lifecycles.
 
-**`rules.sqlite`** — static reference, rebuilt from `data/srd/` by a seed script, shared across campaigns, never written during play.
+**`rules.sqlite`** — static reference, rebuilt from `data/srd/<edition>/` by a seed script, shared across campaigns, never written during play. A `meta` table records the edition it was built from; campaigns record which edition they were created under.
 
 - Typed tables: `monsters`, `spells`, `classes`, `class_features`, `races`, `equipment`, `magic_items`, `conditions`. Key mechanical fields as real columns (CR, AC, HP, spell level, school, cost…), full record as a JSON column.
 - **FTS5 full-text index** over the fork's markdown sections, powering `lookup_rule("grappling")` so the DM quotes real rules text instead of hallucinating.

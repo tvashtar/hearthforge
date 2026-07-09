@@ -5,6 +5,8 @@ from pathlib import Path
 import typer
 
 import dm_engine
+import dm_engine.commands  # noqa: F401 — importing registers every command
+from dm_engine.commands.registry import execute, open_campaign_context
 from dm_engine.content.lookup import DEFAULT_DB, RulesDB
 from dm_engine.state.sheets import render_character_sheet
 from dm_engine.state.store import CampaignStore
@@ -95,3 +97,60 @@ def lookup_spell(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
         typer.echo(f"no spell with slug {slug!r}", err=True)
         raise typer.Exit(code=1)
     typer.echo(json.dumps(spell.model_dump(by_alias=True), indent=2))
+
+
+@app.command()
+def audit(
+    campaign: str = typer.Option(..., help="Campaign slug"),
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+) -> None:
+    """Print every dm_ruling event: id, timestamp, rationale, and digest."""
+    root = campaigns_dir / campaign
+    db_path = root / "campaign.sqlite"
+    if not db_path.exists():
+        typer.echo(f"no campaign at {db_path}", err=True)
+        raise typer.Exit(code=1)
+    store = CampaignStore(sqlite3.connect(db_path), root)
+    try:
+        for ruling in store.rulings():
+            result = json.loads(ruling["result"])
+            typer.echo(f"#{ruling['id']} {ruling['created_at']} — {ruling['rationale']}")
+            typer.echo(f"  {result.get('digest', '')}")
+    finally:
+        store.close()
+
+
+@app.command("cmd")
+def cmd(
+    name: str,
+    campaign: str = typer.Option(..., help="Campaign slug"),
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
+    json_kwargs: str = typer.Option(
+        "{}", "--json", help="Command kwargs as a JSON object"
+    ),
+) -> None:
+    """Execute one registry command against a campaign and print its result.
+
+    Exit code 0 even for refusals (a refusal is a normal result); exit 1
+    only for an unknown campaign or an unreadable rules database.
+    """
+    try:
+        kwargs = json.loads(json_kwargs)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"invalid --json payload: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        ctx = open_campaign_context(campaigns_dir, campaign, db)
+    except (FileNotFoundError, sqlite3.OperationalError) as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(code=1) from exc
+    try:
+        result = execute(name, ctx, **kwargs)
+    finally:
+        ctx.store.close()
+    typer.echo(result.model_dump_json(indent=2))

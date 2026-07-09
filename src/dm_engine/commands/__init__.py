@@ -6,8 +6,10 @@ from dm_engine.commands import (  # noqa: F401
     characters,
     checks,
     combat,
+    queries,
     registry,
     resources,
+    rulings,
     spells,
     world,
 )

@@ -259,3 +259,15 @@ def test_create_character_refuses_non_dict_custom(ctx):
     kwargs = {**ROGUE_KWARGS, "attacks": [{"custom": "x"}]}
     result = registry.execute("create_character", ctx, **kwargs)
     assert result.ok is False
+
+
+def test_create_character_refuses_non_string_weapon_name(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"weapon": "longsword", "name": 42}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+
+
+def test_create_character_refuses_non_bool_weapon_proficient(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"weapon": "longsword", "proficient": 42}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False

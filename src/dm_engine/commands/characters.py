@@ -32,6 +32,12 @@ def _resolve_attacks(
         if "weapon" in entry:
             if not isinstance(entry["weapon"], str):
                 return None, f"attacks[{i}]['weapon'] must be a string"
+            if entry.get("name") is not None and not isinstance(entry["name"], str):
+                return None, f"attacks[{i}]['name'] must be a string"
+            if entry.get("proficient") is not None and not isinstance(
+                entry["proficient"], bool
+            ):
+                return None, f"attacks[{i}]['proficient'] must be a boolean"
             slug = normalize_slug(entry["weapon"])
             record = ctx.rules.get_equipment(slug)
             if record is None or "damage" not in record:

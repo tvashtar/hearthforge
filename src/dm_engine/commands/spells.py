@@ -54,6 +54,33 @@ def _ordinal(n: int) -> str:
     return _ORDINALS.get(n, f"{n}th")
 
 
+def _heal_target_cid(ctx: CommandContext, key: str) -> int | None:
+    """The character id a heal on `key` would land on, or None if no such
+    character exists. Prefers a matching character combatant (by key), else a
+    party character by name; mirrors `_apply_healing`'s resolution so callers
+    can validate a heal target before consuming any state."""
+    combat = ctx.store.combat()
+    if combat["active"]:
+        combatant = next(
+            (c for c in combat["combatants"]
+             if c["key"] == key and c["kind"] == "character"),
+            None,
+        )
+        if combatant is not None:
+            return combatant["character_id"]
+    char = ctx.store.get_character(key)
+    return char["id"] if char is not None else None
+
+
+def _heal_notation(entry: str, mod: int) -> str:
+    """Substitute the ability MOD into a heal notation ("1d8 + MOD").
+
+    Post-processes the "+-" that a negative modifier would otherwise produce
+    (e.g. "1d8+-2") into a clean "1d8-2".
+    """
+    return entry.replace(" ", "").replace("MOD", str(mod)).replace("+-", "-")
+
+
 def _apply_healing(ctx: CommandContext, key: str, amount: int) -> dict | None:
     """Heal `amount` to a character (by combatant key or name), capped at max.
 
@@ -62,21 +89,9 @@ def _apply_healing(ctx: CommandContext, key: str, amount: int) -> dict | None:
     fragment (`healed` is the rolled amount, `hp` the resulting total) or None
     if no such character exists.
     """
-    combat = ctx.store.combat()
-    cid = None
-    if combat["active"]:
-        combatant = next(
-            (c for c in combat["combatants"]
-             if c["key"] == key and c["kind"] == "character"),
-            None,
-        )
-        if combatant is not None:
-            cid = combatant["character_id"]
+    cid = _heal_target_cid(ctx, key)
     if cid is None:
-        char = ctx.store.get_character(key)
-        if char is None:
-            return None
-        cid = char["id"]
+        return None
 
     char_row = ctx.store.get_character_by_id(cid)
     res = ctx.store.get_resources(cid)
@@ -238,12 +253,41 @@ def cast_spell(
                 else:
                     use_reaction_flag = True
 
-    # Step 4: consume the slot.
+    # Step 4: validate the full effect resolution BEFORE consuming any state.
+    # The registry commits refusals (only exceptions roll back), so every
+    # refusal-producing check must run before the slot/concentration/economy
+    # writes below — otherwise a refusal here would commit a lost slot and
+    # stale concentration. Tier 2 has nothing further to validate.
+    extra = record.model_extra or {}
+    combatants = combat["combatants"] if combat["active"] else []
+    if "heal_at_slot_level" in extra:
+        if not targets:
+            return refuse("cast_spell", f"{record.name} needs a target to heal")
+        if extra["heal_at_slot_level"].get(str(slot_level)) is None:
+            return refuse("cast_spell", f"{record.name} has no healing at that slot")
+        if _heal_target_cid(ctx, targets[0]) is None:
+            return refuse("cast_spell", f"no character named {targets[0]!r} to heal")
+    elif "damage" in extra:
+        if _damage_notation(extra, slot_level, char["level"]) is None:
+            return refuse("cast_spell", f"{record.name} has no damage at that level")
+        if extra.get("attack_type"):
+            if not targets:
+                return refuse("cast_spell", f"{record.name} needs a target")
+            if not any(c["key"] == targets[0] for c in combatants):
+                return refuse(
+                    "cast_spell", f"{targets[0]!r} is not a combatant to target"
+                )
+        else:
+            resolved = _select_save_targets(combatants, targets, band, extra)
+            if isinstance(resolved, str):
+                return refuse("cast_spell", resolved)
+
+    # Step 5: consume the slot (validation passed; nothing below refuses).
     if not is_cantrip:
         slots[str(slot_level)]["remaining"] -= 1
         ctx.store.update_resources(cid, spell_slots=slots)
 
-    # Step 5: concentration (replaces any current one).
+    # Step 6: concentration (replaces any current one).
     concentration_replaced = None
     if record.concentration:
         existing = ctx.store.get_resources(cid)["concentration"]
@@ -266,19 +310,18 @@ def cast_spell(
                     c["reaction_used"] = True
         ctx.store.update_combat(combatants=combatants)
 
-    extra = record.model_extra or {}
     base_data = {"slot_used": slot_level}
     if concentration_replaced is not None:
         base_data["concentration_replaced"] = concentration_replaced
 
-    # Step 6: Tier 1 — heal.
+    # Step 7: Tier 1 — heal (roll + apply; targets already validated).
     if "heal_at_slot_level" in extra:
         return _resolve_heal(
             ctx, caster, record, extra, slot_level, targets, abil_mod, is_pc,
             player_damage_value, base_data,
         )
 
-    # Step 6: Tier 1 — damage (spell attack or saving throw).
+    # Step 7: Tier 1 — damage (spell attack or saving throw).
     if "damage" in extra:
         return _resolve_damage(
             ctx, caster, record, extra, slot_level, targets, band, ability,
@@ -286,7 +329,7 @@ def cast_spell(
             player_attack_value, player_damage_value, player_save_values, base_data,
         )
 
-    # Step 7: Tier 2 — no mechanical effect; hand to the DM.
+    # Step 8: Tier 2 — no mechanical effect; hand to the DM.
     slot_note = (
         f" ({_ordinal(slot_level)}-level slot)" if slot_level else " (cantrip)"
     )
@@ -307,7 +350,7 @@ def _resolve_heal(
     entry = extra["heal_at_slot_level"].get(str(slot_level))
     if entry is None:
         return refuse("cast_spell", f"{record.name} has no healing at that slot")
-    notation = entry.replace(" ", "").replace("MOD", str(abil_mod))
+    notation = _heal_notation(entry, abil_mod)
     pv = player_damage_value if is_pc else None
     roll = roll_damage(ctx.roller, notation, player_value=pv)
     frag = _apply_healing(ctx, targets[0], roll.total)
@@ -481,11 +524,17 @@ def _select_save_targets(combatants, targets, band, extra):
         return "no targets given and this spell has no area of effect"
     if band is None:
         return "an area spell needs a band to target"
+    # Deliberately narrower than bands.aoe_targets: an auto-clustered area
+    # spell hits only hostile (monster) combatants in the band, never the
+    # party or downed foes. An empty cluster is a refusal, not a no-op cast.
     hostiles = [
         c for c in combatants
         if c["kind"] == "monster" and not c["defeated"] and c["band"] == band
     ]
-    return hostiles[:max_targets]
+    chosen = hostiles[:max_targets]
+    if not chosen:
+        return f"no valid targets at {band}"
+    return chosen
 
 
 def _copy_concentration_flags(frag: dict, target_dict: dict) -> None:

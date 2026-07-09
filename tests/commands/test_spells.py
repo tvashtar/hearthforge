@@ -1,6 +1,7 @@
 import pytest
 
 from dm_engine.commands import registry
+from dm_engine.commands.spells import _heal_notation
 
 pytestmark = pytest.mark.usefixtures("party")  # Aldric knows cure-wounds, bless, guiding-bolt, sacred-flame, burning-hands (add burning-hands + hold-person to his spells_known in the fixture for these tests)
 
@@ -116,6 +117,56 @@ def test_concentration_replaces_prior_spell(ctx):
     assert result.data["concentration_replaced"] == "bless"
     res = ctx.store.get_resources(aldric["id"])
     assert res["concentration"]["spell"] == "hold-person"
+
+
+def test_heal_notation_avoids_double_sign_for_negative_mod():
+    # A negative ability modifier must not yield "1d8+-2" (Fix 2).
+    assert _heal_notation("1d8 + MOD", -2) == "1d8-2"
+    assert _heal_notation("1d8 + MOD", 3) == "1d8+3"
+    assert _heal_notation("1d8 + MOD", 0) == "1d8+0"
+
+
+def _aldric_state(ctx):
+    aldric = ctx.store.get_character("Brother Aldric")
+    return ctx.store.get_resources(aldric["id"])
+
+
+def test_heal_without_target_refuses_and_keeps_slot(ctx):
+    # (a) validate-before-consume: a refused heal must not spend the slot
+    # or touch concentration.
+    before = _aldric_state(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="cure-wounds", targets=[])
+    assert result.ok is False
+    assert "needs a target to heal" in result.refusal
+    after = _aldric_state(ctx)
+    assert after["spell_slots"]["1"]["remaining"] == before["spell_slots"]["1"]["remaining"]
+    assert after["concentration"] == before["concentration"]
+
+
+def test_save_spell_without_band_refuses_and_keeps_slot(ctx):
+    # (b) an area save spell with no band refuses before consuming the slot.
+    before = _aldric_state(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="burning-hands")
+    assert result.ok is False
+    assert "needs a band to target" in result.refusal
+    after = _aldric_state(ctx)
+    assert after["spell_slots"]["1"]["remaining"] == before["spell_slots"]["1"]["remaining"]
+
+
+def test_aoe_into_empty_band_refuses_and_keeps_slot(ctx):
+    # (c) auto-cluster over a band with no hostiles refuses; slot untouched.
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 3, "band": "near"}],
+                     pc_initiative=15)
+    before = _aldric_state(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="burning-hands", band="far", spend="none")
+    assert result.ok is False
+    assert "no valid targets at far" in result.refusal
+    after = _aldric_state(ctx)
+    assert after["spell_slots"]["1"]["remaining"] == before["spell_slots"]["1"]["remaining"]
 
 
 def test_unknown_spell_and_not_known_refuse(ctx):

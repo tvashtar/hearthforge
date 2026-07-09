@@ -3,10 +3,8 @@ from dm_engine.commands import registry
 FIGHTER_KWARGS = dict(
     name="Kira", role="pc", class_slug="fighter", race_slug="human",
     abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
-    ac=16, proficiencies={"skills": ["athletics", "intimidation"], "saves": ["str", "con"]},
-    attacks=[{"name": "longsword", "ranged": False, "range_ft": 5, "long_range_ft": None,
-              "damage": "1d8", "damage_type": "slashing", "ability": "str",
-              "proficient": True}],
+    ac=16, proficiencies={"skills": ["athletics", "intimidation"]},
+    attacks=[{"weapon": "longsword", "name": "longsword"}],
 )
 
 
@@ -19,10 +17,8 @@ def test_create_character_derives_hp_and_slots(ctx):
         "create_character", ctx, name="Brother Aldric", role="companion",
         class_slug="cleric", race_slug="hill-dwarf",
         abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15, "cha": 12},
-        ac=18, proficiencies={"skills": ["medicine", "religion"], "saves": ["wis", "cha"]},
-        attacks=[{"name": "mace", "ranged": False, "range_ft": 5, "long_range_ft": None,
-                  "damage": "1d6", "damage_type": "bludgeoning", "ability": "str",
-                  "proficient": True}],
+        ac=18, proficiencies={"skills": ["medicine", "religion"]},
+        attacks=[{"weapon": "mace", "name": "mace"}],
         spells_known=["cure-wounds", "bless", "guiding-bolt", "sacred-flame"],
     )
     assert result2.ok, result2.refusal
@@ -54,10 +50,8 @@ def _cleric_kwargs(name="Aldric", role="companion"):
     return dict(
         name=name, role=role, class_slug="cleric", race_slug="hill-dwarf",
         abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15, "cha": 12},
-        ac=18, proficiencies={"skills": ["medicine"], "saves": ["wis", "cha"]},
-        attacks=[{"name": "mace", "ranged": False, "range_ft": 5, "long_range_ft": None,
-                  "damage": "1d6", "damage_type": "bludgeoning", "ability": "str",
-                  "proficient": True}],
+        ac=18, proficiencies={"skills": ["medicine"]},
+        attacks=[{"weapon": "mace", "name": "mace"}],
         spells_known=["bless"],
     )
 
@@ -161,3 +155,83 @@ def test_award_xp_tops_up_spell_slot_maxima(ctx):
     char = ctx.store.get_character("Solo")
     assert char["level"] == 3
     assert res["hit_dice_remaining"] == 3  # pool grew with level
+
+
+# --- character mechanics: derived attacks/saves (append) -------------------
+
+ROGUE_KWARGS = dict(
+    name="Sable", role="pc", class_slug="rogue", race_slug="wood-elf",
+    abilities={"str": 8, "dex": 18, "con": 12, "int": 11, "wis": 12, "cha": 10},
+    ac=15, speed=35,
+    proficiencies={"skills": ["stealth", "acrobatics"], "tools": ["thieves_tools"],
+                   "expertise": ["stealth", "thieves_tools"]},
+    attacks=[{"weapon": "shortsword"}, {"weapon": "dagger"}],
+)
+
+
+def test_create_character_derives_weapon_attacks(ctx):
+    result = registry.execute("create_character", ctx, **ROGUE_KWARGS)
+    assert result.ok
+    char = ctx.store.get_character("Sable")
+    by_name = {a["name"]: a for a in char["attacks"]}
+    # dagger is thrown → two specs
+    assert set(by_name) == {"Shortsword", "Dagger", "Dagger (thrown)"}
+    sword = by_name["Shortsword"]
+    assert (sword["ability"], sword["proficient"], sword["damage"]) == ("dex", True, "1d6")
+    assert sword["source"] == "srd:shortsword"
+    assert by_name["Dagger (thrown)"]["range_ft"] == 20
+
+
+def test_create_character_derives_saves_from_class(ctx):
+    registry.execute("create_character", ctx, **ROGUE_KWARGS)
+    profs = ctx.store.get_character("Sable")["proficiencies"]
+    assert profs["saves"] == ["dex", "int"]
+    assert profs["expertise"] == ["stealth", "thieves-tools"]  # normalized
+
+
+def test_create_character_refuses_caller_saves(ctx):
+    kwargs = {**ROGUE_KWARGS,
+              "proficiencies": {"skills": ["stealth"], "saves": ["cha"]}}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert not result.ok
+    assert "derived from class" in result.refusal
+
+
+def test_create_character_refuses_unknown_weapon(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"weapon": "vorpal-zweihander"}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert not result.ok
+    assert "vorpal-zweihander" in result.refusal
+
+
+def test_create_character_refuses_unknown_skill(ctx):
+    kwargs = {**ROGUE_KWARGS, "proficiencies": {"skills": ["lockpicking"]}}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert not result.ok
+    assert "lockpicking" in result.refusal
+
+
+def test_create_character_accepts_valid_custom_attack(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"custom": {
+        "name": "Cursed Fang", "ability": "dex", "damage": "1d6",
+        "damage_type": "necrotic", "ranged": False, "range_ft": 5}}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok
+    atk = ctx.store.get_character("Sable")["attacks"][0]
+    assert atk["source"] == "custom"
+
+
+def test_create_character_refuses_malformed_custom_attack(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"custom": {
+        "name": "Bad", "ability": "dex", "damage": "1d6+4",
+        "damage_type": "piercing", "ranged": False, "range_ft": 5}}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert not result.ok
+    assert "base dice only" in result.refusal
+
+
+def test_create_character_refuses_attack_entry_without_weapon_or_custom(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"name": "Shortsword", "attack_bonus": 6}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert not result.ok
+    assert "'weapon' or 'custom'" in result.refusal

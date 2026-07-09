@@ -221,10 +221,8 @@ def test_death_save_hardcore_mode_kills(tmp_path, rules_path):
         "create_character", hc_ctx, name="Kira", role="pc",
         class_slug="fighter", race_slug="human",
         abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
-        ac=16, proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
-        attacks=[{"name": "longsword", "ranged": False, "range_ft": 5, "long_range_ft": None,
-                  "damage": "1d8", "damage_type": "slashing", "ability": "str",
-                  "proficient": True}],
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
     )
     kira = hc_ctx.store.get_character("Kira")
     hc_ctx.store.conn.execute("UPDATE resources SET hp = 0 WHERE character_id = ?", (kira["id"],))

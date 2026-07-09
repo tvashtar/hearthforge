@@ -6,14 +6,56 @@ leveling math; the `award_xp` command is a thin wrapper over it.
 
 from __future__ import annotations
 
+from pydantic import ValidationError
+
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
+from dm_engine.models.character import AttackSpec, normalize_slug
+from dm_engine.rules.character_build import build_proficiencies, derive_attack
 from dm_engine.rules.checks import ability_modifier
 from dm_engine.rules.progression import level_for_xp, level_up_hp_gain, max_hp_for_level
 from dm_engine.state.sheets import render_character_sheet
 
 _ROLES = ("pc", "companion")
 _ABILITY_KEYS = ("str", "dex", "con", "int", "wis", "cha")
+
+
+def _resolve_attacks(
+    ctx: CommandContext, entries: list, abilities: dict, class_record: dict
+) -> tuple[list[dict] | None, str | None]:
+    """Resolve declared attack entries into stored AttackSpec dicts.
+    Returns (specs, None) on success, (None, refusal_reason) on bad input."""
+    specs: list[AttackSpec] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            return None, f"attacks[{i}] must be an object"
+        if "weapon" in entry:
+            slug = normalize_slug(entry["weapon"])
+            record = ctx.rules.get_equipment(slug)
+            if record is None or "damage" not in record:
+                return None, (
+                    f"unknown weapon {entry['weapon']!r} — no SRD equipment "
+                    "record with damage; use a {'custom': {...}} attack instead"
+                )
+            specs.extend(derive_attack(
+                record, abilities, class_record,
+                name=entry.get("name"), proficient=entry.get("proficient"),
+            ))
+        elif "custom" in entry:
+            try:
+                specs.append(AttackSpec(**{**entry["custom"], "source": "custom"}))
+            except ValidationError as exc:
+                first = exc.errors()[0]
+                return None, (
+                    f"attacks[{i}] invalid custom spec: "
+                    f"{'.'.join(str(p) for p in first['loc'])}: {first['msg']}"
+                )
+        else:
+            return None, f"attacks[{i}] must have a 'weapon' or 'custom' key"
+    names = [s.name for s in specs]
+    if len(names) != len(set(names)):
+        return None, f"duplicate attack names: {', '.join(sorted(set(n for n in names if names.count(n) > 1)))}"
+    return [s.model_dump() for s in specs], None
 
 
 def _sheet_payload(ctx: CommandContext, character_id: int) -> dict:
@@ -69,6 +111,14 @@ def create_character(
         return refuse(
             "create_character", "the party already has a living pc (only one allowed)"
         )
+    try:
+        profs = build_proficiencies(proficiencies, class_record)
+    except (ValueError, ValidationError) as exc:
+        msg = exc.errors()[0]["msg"] if isinstance(exc, ValidationError) else str(exc)
+        return refuse("create_character", f"invalid proficiencies: {msg}")
+    resolved_attacks, reason = _resolve_attacks(ctx, attacks, abilities, class_record)
+    if reason:
+        return refuse("create_character", reason)
 
     # Derive level-1 stats.
     hit_die = class_record["hit_die"]
@@ -79,7 +129,7 @@ def create_character(
     cid = ctx.store.insert_character(
         name=name, role=role, class_slug=class_slug, race_slug=race_slug, level=1,
         abilities=abilities, max_hp=max_hp, ac=ac, speed=speed,
-        proficiencies=proficiencies, attacks=attacks, spells_known=spells_known,
+        proficiencies=profs.model_dump(), attacks=resolved_attacks, spells_known=spells_known,
         spell_slots=spell_slots,
     )
 

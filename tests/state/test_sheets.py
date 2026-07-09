@@ -7,10 +7,8 @@ def test_sheet_renders_core_fields(ctx):
         "create_character", ctx, name="Kira", role="pc", class_slug="fighter",
         race_slug="human",
         abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
-        ac=16, proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
-        attacks=[{"name": "longsword", "ranged": False, "range_ft": 5,
-                  "long_range_ft": None, "damage": "1d8", "damage_type": "slashing",
-                  "ability": "str", "proficient": True}],
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
     )
     md = render_character_sheet(ctx.store, ctx.store.get_character("Kira")["id"])
     for expected in ("# Kira", "fighter", "12 / 12", "AC", "16", "longsword", "+5"):
@@ -24,10 +22,8 @@ def test_sheet_renders_concentration_spell_name_not_dict_repr(ctx):
         "create_character", ctx, name="Kira", role="pc", class_slug="fighter",
         race_slug="human",
         abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
-        ac=16, proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
-        attacks=[{"name": "longsword", "ranged": False, "range_ft": 5,
-                  "long_range_ft": None, "damage": "1d8", "damage_type": "slashing",
-                  "ability": "str", "proficient": True}],
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
     )
     kira = ctx.store.get_character("Kira")
     ctx.store.update_resources(

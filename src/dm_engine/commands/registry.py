@@ -17,6 +17,7 @@ from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.content.lookup import RulesDB
 from dm_engine.rules.dice import Roll, SeededDiceRoller
 from dm_engine.state import sheets
+from dm_engine.state.migrate import normalize_characters
 from dm_engine.state.store import CampaignStore
 
 _COMMANDS: dict[str, Callable[..., CommandResult]] = {}
@@ -111,6 +112,8 @@ def open_campaign_context(
     campaigns_dir: Path, slug: str, rules_db_path: Path
 ) -> CommandContext:
     store = CampaignStore.open(campaigns_dir, slug)
+    rules = RulesDB(rules_db_path)
+    normalize_characters(store, rules)
     meta = store.campaign_meta()
     if meta.get("rng_state") is not None:
         roller = RecordingRoller(meta["rng_seed"])
@@ -120,4 +123,4 @@ def open_campaign_context(
         # Legacy/fresh campaigns with no persisted RNG state: fall back to
         # fast-forwarding d20 draws (only exact when all prior rolls were d20).
         roller = RecordingRoller(meta["rng_seed"], initial_draws=meta["rng_draws"])
-    return CommandContext(store=store, roller=roller, rules=RulesDB(rules_db_path))
+    return CommandContext(store=store, roller=roller, rules=rules)

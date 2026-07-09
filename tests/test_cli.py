@@ -42,10 +42,8 @@ def _bootstrap_campaign_with_ruling(campaigns_dir, rules_path, slug):
         "create_character", ctx, name="Kira", role="pc",
         class_slug="fighter", race_slug="human",
         abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
-        ac=16, proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
-        attacks=[{"name": "longsword", "ranged": False, "range_ft": 5,
-                  "long_range_ft": None, "damage": "1d8", "damage_type": "slashing",
-                  "ability": "str", "proficient": True}],
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
     )
     registry.execute(
         "dm_ruling", ctx, description="Falling rocks", rationale="trap sprung, RAW silent",

@@ -1,10 +1,13 @@
 import json
+import sqlite3
 from pathlib import Path
 
 import typer
 
 import dm_engine
 from dm_engine.content.lookup import DEFAULT_DB, RulesDB
+from dm_engine.state.sheets import render_character_sheet
+from dm_engine.state.store import CampaignStore
 
 app = typer.Typer(help="AI dungeon master engine.", no_args_is_help=True)
 lookup_app = typer.Typer(help="Query the seeded SRD rules database.", no_args_is_help=True)
@@ -31,6 +34,31 @@ def seed(dest: Path = typer.Option(DEFAULT_DB, help="Output path for rules.sqlit
     )
     for table, n in counts.items():
         typer.echo(f"{table:12} {n}")
+
+
+@app.command()
+def sheet(
+    character: str,
+    campaign: str = typer.Option(..., help="Campaign slug"),
+    campaigns_dir: Path = typer.Option(
+        REPO_ROOT / "campaigns", help="Directory holding campaign folders"
+    ),
+) -> None:
+    """Print a character's rendered markdown sheet (read-only, no snapshot)."""
+    root = campaigns_dir / campaign
+    db_path = root / "campaign.sqlite"
+    if not db_path.exists():
+        typer.echo(f"no campaign at {db_path}", err=True)
+        raise typer.Exit(code=1)
+    store = CampaignStore(sqlite3.connect(db_path), root)
+    try:
+        char = store.get_character(character)
+        if char is None:
+            typer.echo(f"no character named {character!r} in campaign {campaign!r}", err=True)
+            raise typer.Exit(code=1)
+        typer.echo(render_character_sheet(store, char["id"]))
+    finally:
+        store.close()
 
 
 @lookup_app.command("rule")

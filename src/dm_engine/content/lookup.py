@@ -108,6 +108,18 @@ class RulesDB:
         ).fetchall()
         return [SpellSummary(*row) for row in rows]
 
+    def get_class(self, class_slug: str) -> dict | None:
+        """Return a class record incl. its `hit_die` (from the dedicated
+        column) merged into the parsed `data` payload, or None if unknown."""
+        row = self._conn.execute(
+            "SELECT hit_die, data FROM classes WHERE slug=?", (class_slug,)
+        ).fetchone()
+        if row is None:
+            return None
+        data = json.loads(row[1])
+        data["hit_die"] = row[0]
+        return data
+
     def get_class_level(self, class_slug: str, level: int) -> dict | None:
         row = self._conn.execute(
             "SELECT data FROM class_levels WHERE class_slug=? AND level=?",

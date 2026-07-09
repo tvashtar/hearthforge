@@ -235,3 +235,27 @@ def test_create_character_refuses_attack_entry_without_weapon_or_custom(ctx):
     result = registry.execute("create_character", ctx, **kwargs)
     assert not result.ok
     assert "'weapon' or 'custom'" in result.refusal
+
+
+def test_create_character_refuses_non_list_skills(ctx):
+    kwargs = {**ROGUE_KWARGS, "proficiencies": {"skills": 42}}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+
+
+def test_create_character_refuses_non_string_skill_entries(ctx):
+    kwargs = {**ROGUE_KWARGS, "proficiencies": {"skills": [42]}}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+
+
+def test_create_character_refuses_non_string_weapon(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"weapon": 42}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+
+
+def test_create_character_refuses_non_dict_custom(ctx):
+    kwargs = {**ROGUE_KWARGS, "attacks": [{"custom": "x"}]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False

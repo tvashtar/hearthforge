@@ -87,7 +87,9 @@ class Proficiencies(BaseModel):
 
     @field_validator("skills", "expertise", "tools", mode="before")
     @classmethod
-    def _normalize(cls, v: list[str]) -> list[str]:
+    def _normalize(cls, v: object) -> list[str]:
+        if not isinstance(v, list) or not all(isinstance(s, str) for s in v):
+            raise ValueError("must be a list of strings")
         return [normalize_slug(s) for s in v]
 
     @field_validator("skills")

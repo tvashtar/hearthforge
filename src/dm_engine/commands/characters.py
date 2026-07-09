@@ -30,6 +30,8 @@ def _resolve_attacks(
         if not isinstance(entry, dict):
             return None, f"attacks[{i}] must be an object"
         if "weapon" in entry:
+            if not isinstance(entry["weapon"], str):
+                return None, f"attacks[{i}]['weapon'] must be a string"
             slug = normalize_slug(entry["weapon"])
             record = ctx.rules.get_equipment(slug)
             if record is None or "damage" not in record:
@@ -42,6 +44,8 @@ def _resolve_attacks(
                 name=entry.get("name"), proficient=entry.get("proficient"),
             ))
         elif "custom" in entry:
+            if not isinstance(entry["custom"], dict):
+                return None, f"attacks[{i}]['custom'] must be an object"
             try:
                 specs.append(AttackSpec(**{**entry["custom"], "source": "custom"}))
             except ValidationError as exc:

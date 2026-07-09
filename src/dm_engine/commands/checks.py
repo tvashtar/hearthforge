@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
+from dm_engine.models.character import SKILL_ABILITIES
 from dm_engine.rules.checks import (
     ability_modifier,
     combine_advantage,
@@ -18,27 +19,6 @@ from dm_engine.rules.checks import (
 )
 from dm_engine.rules.conditions import effects_for
 from dm_engine.rules.death import DeathSaveState, apply_death_save
-
-SKILL_ABILITIES: dict[str, str] = {
-    "acrobatics": "dex",
-    "animal-handling": "wis",
-    "arcana": "int",
-    "athletics": "str",
-    "deception": "cha",
-    "history": "int",
-    "insight": "wis",
-    "intimidation": "cha",
-    "investigation": "int",
-    "medicine": "wis",
-    "nature": "int",
-    "perception": "wis",
-    "performance": "cha",
-    "persuasion": "cha",
-    "religion": "int",
-    "sleight-of-hand": "dex",
-    "stealth": "dex",
-    "survival": "wis",
-}
 
 _ABILITIES = ("str", "dex", "con", "int", "wis", "cha")
 

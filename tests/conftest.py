@@ -65,15 +65,6 @@ def party(ctx):
         spells_known=["cure-wounds", "bless", "guiding-bolt", "sacred-flame",
                       "burning-hands", "hold-person"],
     )
-    # The binding short/long-rest tests heal Kira to 14 (short: 4 + die 8 + CON 2;
-    # long: to max), and rest healing caps at max_hp — so Kira's max_hp must be 14.
-    # A level-1 fighter derives 12, so we bump max_hp to 14 while leaving current hp
-    # at 12 (Task 7's scene-state test asserts her live hp is 12) and her level at 1
-    # (the short-rest test relies on her single hit die). Fixtures aren't gameplay,
-    # so a direct write is fine.
-    kira = ctx.store.get_character("Kira")
-    ctx.store.update_character(kira["id"], max_hp=14)
-
     # Brother Aldric must be a level-3 cleric so he has 2nd-level slots
     # (needed for hold-person). Deterministic direct store writes — fixtures
     # aren't gameplay, so we bypass the XP-splitting award_xp path (which would

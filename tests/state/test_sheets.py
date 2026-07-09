@@ -63,6 +63,28 @@ def test_sheet_renders_core_fields(ctx):
     assert len(files) == 1  # registry hook already materialized it
 
 
+def test_sheet_renders_degraded_line_for_unfixable_legacy_attack(ctx):
+    registry.execute(
+        "create_character", ctx, name="Kira", role="pc", class_slug="fighter",
+        race_slug="human",
+        abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"}],
+    )
+    kira = ctx.store.get_character("Kira")
+    legacy_attacks = kira["attacks"] + [{
+        "name": "Void Lash", "attack_bonus": 9, "damage": "6d6+4",
+        "damage_type": "necrotic",
+    }]
+    ctx.store.update_character(kira["id"], attacks=legacy_attacks)
+    ctx.store.conn.commit()
+
+    md = render_character_sheet(ctx.store, kira["id"])  # must not raise
+
+    assert "Void Lash: (invalid legacy spec — refuses on use)" in md
+    assert "longsword" in md  # the valid attack still renders normally
+
+
 def test_sheet_renders_concentration_spell_name_not_dict_repr(ctx):
     registry.execute(
         "create_character", ctx, name="Kira", role="pc", class_slug="fighter",

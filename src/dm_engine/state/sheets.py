@@ -11,7 +11,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dm_engine.models.character import SKILL_ABILITIES
+from pydantic import ValidationError
+
+from dm_engine.models.character import SKILL_ABILITIES, AttackSpec
 from dm_engine.rules.character_build import (
     attack_damage_mod,
     attack_to_hit,
@@ -174,6 +176,14 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
     lines.append("## Attacks")
     if char["attacks"]:
         for atk in char["attacks"]:
+            try:
+                AttackSpec(**atk)
+            except ValidationError:
+                # Legacy spec the migration deliberately left untouched
+                # (see state/migrate.py) — refuses on use, degraded here.
+                name = atk.get("name", "unknown attack")
+                lines.append(f"- {name}: (invalid legacy spec — refuses on use)")
+                continue
             to_hit = attack_to_hit(atk, abilities, level)
             dmg_mod = attack_damage_mod(atk, abilities)
             damage = atk["damage"] + (_fmt_mod(dmg_mod) if dmg_mod else "")

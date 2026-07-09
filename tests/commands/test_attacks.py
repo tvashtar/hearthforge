@@ -199,6 +199,23 @@ def test_player_attack_value_out_of_range(ctx, combat):
 # --- reaction / opportunity attack --------------------------------------
 
 
+def test_attack_with_invalid_stored_spec_refuses_not_crashes(ctx, combat):
+    """A stored spec that predates validation (or survived migration
+    untouched) must refuse cleanly on use, never KeyError mid-combat."""
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_character(
+        kira["id"],
+        attacks=[{"name": "haunted-blade", "attack_bonus": 6, "damage": "1d6+4"}],
+    )
+    ctx.store.conn.commit()
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="haunted-blade")
+    assert not result.ok
+    assert "haunted-blade" in result.refusal and "Kira" in result.refusal
+    assert "invalid" in result.refusal
+
+
 def test_off_turn_reaction_used_once(ctx, combat):
     _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
     _engage_pair(ctx, "Kira", "goblin-1")

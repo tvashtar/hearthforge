@@ -18,17 +18,17 @@ from __future__ import annotations
 
 import re
 
+from pydantic import ValidationError
+
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
+from dm_engine.models.character import AttackSpec
 from dm_engine.rules.action_economy import TurnBudget
 from dm_engine.rules.action_economy import spend as spend_budget
 from dm_engine.rules.attacks import resolve_attack_roll, roll_damage
 from dm_engine.rules.bands import distance_band, weapon_range_legality
-from dm_engine.rules.checks import (
-    ability_modifier,
-    combine_advantage,
-    proficiency_bonus,
-)
+from dm_engine.rules.character_build import attack_damage_mod, attack_to_hit
+from dm_engine.rules.checks import combine_advantage
 from dm_engine.rules.concentration import concentration_save_dc
 from dm_engine.rules.conditions import CONDITIONS, attack_interaction, effects_for
 from dm_engine.rules.damage import apply_mitigation
@@ -251,12 +251,18 @@ def attack(
                 "attack",
                 f"{attacker} has no attack named {attack_name!r} (available: {names})",
             )
-        abil_mod = ability_modifier(char["abilities"][spec["ability"]])
-        attack_bonus = abil_mod
-        if spec.get("proficient"):
-            attack_bonus += proficiency_bonus(char["level"])
-        sign = "+" if abil_mod >= 0 else "-"
-        damage_notation = f"{spec['damage']}{sign}{abs(abil_mod)}"
+        try:
+            AttackSpec(**spec)
+        except ValidationError:
+            return refuse(
+                "attack",
+                f"{attacker}'s attack {attack_name!r} has an invalid stored "
+                "spec (pre-validation data?); recreate it or fix via migration",
+            )
+        attack_bonus = attack_to_hit(spec, char["abilities"], char["level"])
+        dmg_mod = attack_damage_mod(spec, char["abilities"])
+        sign = "+" if dmg_mod >= 0 else "-"
+        damage_notation = f"{spec['damage']}{sign}{abs(dmg_mod)}"
         damage_type = spec["damage_type"]
         spec_ranged = spec["ranged"]
         range_ft = spec["range_ft"]

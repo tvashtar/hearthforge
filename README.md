@@ -1,10 +1,13 @@
-# llm-dungeon-master
+# Hearthforge
 
-An engine-first AI Dungeon Master for solo D&D 5e (2014 rules) campaigns.
-The `dm-engine` is the complete mechanical game — rules lookup, audited
-dice, and persistent campaign state — exposed as an MCP server. Claude is
-the narrative brain on top: it never computes or invents mechanical facts,
-only issues commands and narrates the results. Play happens inside
+A solo D&D 5e campaign by the fire: Claude tells the story, a local rules
+engine rolls the dice.
+
+Hearthforge is engine-first. The `dm-engine` is the complete mechanical
+game — rules lookup (2014 rules / SRD 5.1), audited dice, and persistent
+campaign state — exposed as an MCP server. Claude is the narrative brain
+on top: it never computes or invents mechanical facts, only issues
+commands and narrates the results. Play happens inside
 [Claude Code](https://claude.com/claude-code), driven by the `dm-session`
 skill.
 

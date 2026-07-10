@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/hearthforge_splash.jpg" alt="Hearthforge — a tavern table with a campaign map, dice, and a quill beside a roaring hearth" width="700">
+</p>
+
 # Hearthforge
 
 A solo D&D 5e campaign by the fire: Claude tells the story, a local rules

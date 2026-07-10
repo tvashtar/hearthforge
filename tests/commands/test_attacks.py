@@ -264,6 +264,81 @@ def test_mitigation_against_resistant_monster(ctx):
     assert "resistance" in result.data["damage"]["applied"]
 
 
+def _make_longsword_magical(ctx):
+    """Mark Kira's longsword as a magic weapon via the spec's properties."""
+    kira = ctx.store.get_character("Kira")
+    attacks = kira["attacks"]
+    for spec in attacks:
+        if spec["name"] == "longsword":
+            spec["properties"] = [*spec.get("properties", []), "magical"]
+    ctx.store.update_character(kira["id"], attacks=attacks)
+    ctx.store.conn.commit()
+
+
+def _duel(ctx, slug):
+    """Start combat against one monster and put Kira toe-to-toe with it."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": slug, "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    key = f"{slug}-1"
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=[key])
+    _engage_pair(ctx, "Kira", key)
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=[key])
+    return key
+
+
+def test_magical_attack_bypasses_nonmagical_resistance(ctx):
+    # shadow resists 'bludgeoning, piercing, and slashing from nonmagical
+    # weapons' — a magic longsword deals full damage (2014 RAW).
+    _make_longsword_magical(ctx)
+    key = _duel(ctx, "shadow")
+    result = registry.execute("attack", ctx, attacker="Kira", target=key,
+                              attack_name="longsword",
+                              player_attack_value=15, player_damage_value=6)
+    assert result.ok, result.refusal
+    assert result.data["hit"] is True
+    assert result.data["damage"]["raw"] == 9
+    assert result.data["damage"]["final"] == 9  # NOT halved
+    assert result.data["damage"]["applied"] == []
+
+
+def test_plain_resistance_applies_to_magical_attack(ctx):
+    # swarm-of-rats has a plain (no caveat) slashing resistance: it halves
+    # magical and nonmagical hits alike.
+    _make_longsword_magical(ctx)
+    key = _duel(ctx, "swarm-of-rats")
+    result = registry.execute("attack", ctx, attacker="Kira", target=key,
+                              attack_name="longsword",
+                              player_attack_value=15, player_damage_value=6)
+    assert result.ok, result.refusal
+    assert result.data["hit"] is True
+    assert result.data["damage"]["final"] == 4  # 9 halved, rounded down
+    assert "resistance" in result.data["damage"]["applied"]
+
+
+def test_werewolf_immunity_blocks_nonmagical_but_not_magical(ctx):
+    # werewolf-hybrid is immune to 'bludgeoning, piercing, and slashing from
+    # nonmagical weapons that aren't silvered'.
+    key = _duel(ctx, "werewolf-hybrid")
+    plain = registry.execute("attack", ctx, attacker="Kira", target=key,
+                             attack_name="longsword",
+                             player_attack_value=15, player_damage_value=6)
+    assert plain.ok, plain.refusal
+    assert plain.data["hit"] is True
+    assert plain.data["damage"]["final"] == 0
+    assert plain.data["damage"]["applied"] == ["immunity"]
+
+    _make_longsword_magical(ctx)
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=[key])
+    magical = registry.execute("attack", ctx, attacker="Kira", target=key,
+                               attack_name="longsword",
+                               player_attack_value=15, player_damage_value=6)
+    assert magical.ok, magical.refusal
+    assert magical.data["hit"] is True
+    assert magical.data["damage"]["final"] == 9
+    assert magical.data["damage"]["applied"] == []
+
+
 # --- condition commands -------------------------------------------------
 
 

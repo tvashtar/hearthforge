@@ -141,6 +141,16 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
     # Mutable holder for the one active campaign context (lifecycle tools set it).
     active: dict[str, CommandContext | None] = {"ctx": None}
 
+    def activate(ctx: CommandContext) -> None:
+        """Make `ctx` the active context, closing the one it replaces.
+
+        Called with the new context already built, so a failed create/open
+        leaves the previous campaign open and usable."""
+        prev = active["ctx"]
+        if prev is not None:
+            prev.store.close()
+        active["ctx"] = ctx
+
     @server.list_tools()
     async def list_tools() -> list[Tool]:
         tools = [
@@ -167,7 +177,7 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         if name == "create_campaign":
             ctx = bootstrap_campaign(campaigns_dir, rules_db_path, **arguments)
-            active["ctx"] = ctx
+            activate(ctx)
             result = CommandResult(
                 ok=True,
                 command="create_campaign",
@@ -178,7 +188,7 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
 
         if name == "open_campaign":
             ctx = open_campaign_context(campaigns_dir, arguments["slug"], rules_db_path)
-            active["ctx"] = ctx
+            activate(ctx)
             brief = execute("get_campaign_brief", ctx)
             result = CommandResult(
                 ok=True,
@@ -196,14 +206,19 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
 
         try:
             result = execute(name, ctx, **arguments)
-        except Exception:
+        except Exception as exc:
             # Handler exceptions are engine bugs: keep them visible (re-raise
             # as an MCP tool error) but rebuild the context so the session
-            # stays usable after the rolled-back transaction.
+            # stays usable after the rolled-back transaction. The registry
+            # has already appended a crash event to the audit log; surface
+            # the command name and exception class to the client rather than
+            # the bare exception text.
             slug = ctx.store.campaign_meta()["slug"]
             ctx.store.close()
             active["ctx"] = open_campaign_context(campaigns_dir, slug, rules_db_path)
-            raise
+            raise RuntimeError(
+                f"engine crash in command {name!r}: {type(exc).__name__}: {exc}"
+            ) from exc
         return _text(result)
 
     return server

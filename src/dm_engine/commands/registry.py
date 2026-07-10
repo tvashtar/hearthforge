@@ -10,6 +10,7 @@ engine bugs, never gameplay.
 from __future__ import annotations
 
 import json
+import traceback
 from collections.abc import Callable
 from pathlib import Path
 
@@ -86,26 +87,72 @@ class CommandContext:
 def execute(name: str, ctx: CommandContext, /, **kwargs) -> CommandResult:
     handler = _COMMANDS.get(name)
     ctx.roller.begin_capture()
-    with ctx.store.transaction():
-        if handler is None:
-            result = refuse(name, f"unknown command {name!r}")
-        else:
-            result = handler(ctx, **kwargs)
-        rolls = [r.model_dump() for r in ctx.roller.captured()]
-        event_id = ctx.store.append_event(
-            command=name,
-            inputs=kwargs,
-            result=result.model_dump(),
-            rolls=rolls,
-            is_ruling=(name == "dm_ruling" and result.ok),
-            rationale=kwargs.get("rationale") if name == "dm_ruling" else None,
-        )
-        result.event_ids = [event_id]
-        ctx.store.set_rng_draws(ctx.roller.draws)
-        ctx.store.set_rng_state(json.dumps(ctx.roller.getstate()))
-        if result.ok:
-            sheets.write_party_sheets(ctx.store)
+    try:
+        with ctx.store.transaction():
+            if handler is None:
+                result = refuse(name, f"unknown command {name!r}")
+            else:
+                result = handler(ctx, **kwargs)
+            rolls = [r.model_dump() for r in ctx.roller.captured()]
+            event_id = ctx.store.append_event(
+                command=name,
+                inputs=kwargs,
+                result=result.model_dump(),
+                rolls=rolls,
+                is_ruling=(name == "dm_ruling" and result.ok),
+                rationale=kwargs.get("rationale") if name == "dm_ruling" else None,
+            )
+            result.event_ids = [event_id]
+            ctx.store.set_rng_draws(ctx.roller.draws)
+            ctx.store.set_rng_state(json.dumps(ctx.roller.getstate()))
+            if result.ok:
+                sheets.write_party_sheets(ctx.store)
+    except Exception as exc:
+        # The rollback just erased this command's event row along with its
+        # state mutations, leaving a hole in the append-only audit log
+        # exactly where the engine misbehaved. Record the crash in its own
+        # committed transaction, then let the engine bug propagate (FC-3:
+        # exceptions are bugs, never gameplay).
+        _append_crash_event(ctx, name, kwargs, exc)
+        raise
     return result
+
+
+def _append_crash_event(
+    ctx: CommandContext, name: str, kwargs: dict, exc: Exception
+) -> None:
+    """Best-effort audit row for a handler crash (an engine bug, FC-6).
+
+    Runs after the failed command's transaction has rolled back, in its own
+    committed transaction. Only the event row is written: game state stays
+    rolled back, and the RNG position is NOT persisted (the rolled-back draws
+    are re-drawn on replay, so the crash event records no rolls). A failure
+    here is swallowed — it must never mask the original engine bug.
+    """
+    crash_result = {
+        "ok": False,
+        "command": name,
+        "refusal": None,
+        "digest": f"ENGINE CRASH: {type(exc).__name__}: {exc}",
+        "data": {
+            "crash": True,
+            "exception_type": type(exc).__name__,
+            "exception_message": str(exc),
+            "traceback": "".join(traceback.format_exception(exc)),
+        },
+        "gm_only": True,
+        "event_ids": [],
+    }
+    try:
+        # kwargs normally arrive JSON-safe (MCP/CLI), but a crash may be
+        # caused by exotic inputs — repr anything json can't take.
+        inputs = json.loads(json.dumps(kwargs, default=repr))
+        with ctx.store.transaction():
+            ctx.store.append_event(
+                command=name, inputs=inputs, result=crash_result, rolls=[]
+            )
+    except Exception:
+        pass
 
 
 def open_campaign_context(

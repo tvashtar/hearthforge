@@ -2,6 +2,23 @@ import json
 import sqlite3
 from contextlib import closing
 
+from dm_engine.content.seed import ensure_rules_db
+
+
+def test_ensure_rules_db_builds_when_missing_and_noops_when_present(tmp_path):
+    dest = tmp_path / "build" / "rules.sqlite"
+    assert not dest.exists()
+
+    built = ensure_rules_db(dest)
+    assert built == dest and dest.exists()
+    with closing(sqlite3.connect(dest)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM monsters").fetchone()[0] > 300
+
+    stamp = dest.stat().st_mtime_ns
+    again = ensure_rules_db(dest)
+    assert again == dest
+    assert dest.stat().st_mtime_ns == stamp  # present → untouched, no rebuild
+
 
 def test_seed_row_counts(rules_db):
     with closing(sqlite3.connect(rules_db)) as conn:

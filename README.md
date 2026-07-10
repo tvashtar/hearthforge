@@ -31,11 +31,12 @@ You need [uv](https://docs.astral.sh/uv/) and
 ```
 git clone https://github.com/tvashtar/hearthforge.git
 cd hearthforge
-uv sync && uv run dm seed
+uv sync
 claude
 ```
 
-Then just say **"start a campaign"**. Claude interviews you for tone,
+Then just say **"start a campaign"**. (The rules database builds itself
+from the vendored SRD data on first launch.) Claude interviews you for tone,
 character concept, companions, and death mode, then builds your starting
 world and the adventure begins. Next time, "continue my campaign" picks up
 from the recap.

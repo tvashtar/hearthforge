@@ -192,10 +192,10 @@ def test_next_turn_resets_reactions_each_round(ctx):
 
 # --- surprise --------------------------------------------------------------
 
-def test_surprised_combatant_gets_no_budget_in_round_one(ctx):
-    _start(ctx, surprise=["goblin-1"])
+def _assert_no_round_one_budget(ctx, key):
+    """Walk to `key`'s round-1 turn via next_turn and assert it has no budget."""
     combat = ctx.store.combat()
-    idx = next(i for i, c in enumerate(combat["combatants"]) if c["key"] == "goblin-1")
+    idx = next(i for i, c in enumerate(combat["combatants"]) if c["key"] == key)
     if idx == 0:
         assert combat["combatants"][0]["budget"] is None
     else:
@@ -203,6 +203,91 @@ def test_surprised_combatant_gets_no_budget_in_round_one(ctx):
         ctx.store.conn.commit()
         result = registry.execute("next_turn", ctx)
         assert result.data["budget"] is None
+
+
+def test_surprised_combatant_gets_no_budget_in_round_one(ctx):
+    result = _start(ctx, surprise=["goblin-1"])
+    assert result.ok, result.refusal
+    assert result.data["surprised"] == ["goblin-1"]
+    _assert_no_round_one_budget(ctx, "goblin-1")
+
+
+def test_surprise_unmatched_entry_refused_before_state_written(ctx):
+    # Real-session failure mode: display labels passed as surprise entries
+    # matched nothing and surprise silently never applied. Must refuse instead.
+    result = _start(ctx, surprise=["Pale Sentinel"])
+    assert result.ok is False
+    assert "Pale Sentinel" in result.refusal
+    assert ctx.store.combat()["active"] == 0  # refused before any state change
+
+
+def test_surprise_matches_label_and_applies(ctx):
+    result = _start(
+        ctx,
+        monsters=[{"slug": "goblin", "label": "Pale Sentinel"}],
+        surprise=["Pale Sentinel"],
+    )
+    assert result.ok, result.refusal
+    goblin = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "goblin-1")
+    assert goblin["surprised"] is True
+    _assert_no_round_one_budget(ctx, "goblin-1")
+
+
+def test_surprise_still_matches_character_name(ctx):
+    result = _start(ctx, surprise=["Kira"])
+    assert result.ok, result.refusal
+    kira = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira["surprised"] is True
+
+
+# --- monster labels ---------------------------------------------------------
+
+def test_label_surfaces_as_display_name(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "label": "Pale Sentinel"}])
+    assert result.ok, result.refusal
+    entry = next(o for o in result.data["order"] if o["key"] == "goblin-1")
+    assert entry["name"] == "Pale Sentinel"
+    state = registry.execute("get_scene_state", ctx)
+    goblin = next(c for c in state.data["combat"]["order"] if c["key"] == "goblin-1")
+    assert goblin["name"] == "Pale Sentinel"
+
+
+def test_label_with_count_numbers_instances(ctx):
+    result = _start(
+        ctx,
+        monsters=[{"slug": "goblin", "count": 2, "label": "Pale Walker"}],
+        surprise=["Pale Walker 2"],
+    )
+    assert result.ok, result.refusal
+    combat = ctx.store.combat()
+    names = {c["key"]: c["name"] for c in combat["combatants"] if c["kind"] == "monster"}
+    assert names == {"goblin-1": "Pale Walker 1", "goblin-2": "Pale Walker 2"}
+    surprised = {c["key"] for c in combat["combatants"] if c["surprised"]}
+    assert surprised == {"goblin-2"}
+
+
+def test_monster_entry_unknown_field_refused(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "labell": "Typo"}])
+    assert result.ok is False
+    assert "labell" in result.refusal
+    assert ctx.store.combat()["active"] == 0
+
+
+def test_monster_entry_missing_slug_refused(ctx):
+    result = _start(ctx, monsters=[{"count": 2}])
+    assert result.ok is False
+    assert "slug" in result.refusal
+
+
+def test_monster_entry_bad_count_refused(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "count": 0}])
+    assert result.ok is False
+
+
+def test_monster_entry_unknown_band_refused(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "band": "orbit"}])
+    assert result.ok is False
+    assert "orbit" in result.refusal
 
 
 # --- move ------------------------------------------------------------------

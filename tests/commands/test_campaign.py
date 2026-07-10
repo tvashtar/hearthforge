@@ -1,3 +1,5 @@
+import pytest
+
 from dm_engine.commands import registry
 from dm_engine.commands.campaign import bootstrap_campaign
 
@@ -100,3 +102,60 @@ def test_brief_lists_party_and_open_quests(ctx):
     slugs = [q["slug"] for q in brief.data["quests"]]
     assert "find-the-key" in slugs
     assert brief.data["party"] == []
+
+
+# -- read-only history commands ------------------------------------------
+
+
+def test_list_recaps_returns_all_oldest_first(ctx):
+    registry.execute("checkpoint", ctx, content="Secret: the duke is a lich.")
+    registry.execute("end_session", ctx, recap="They fled the tower.")
+    result = registry.execute("list_recaps", ctx)
+    assert result.ok and result.gm_only
+    kinds = [r["kind"] for r in result.data["recaps"]]
+    assert kinds == ["checkpoint", "session_end"]
+    assert result.data["recaps"][1]["content"] == "They fled the tower."
+    assert all({"kind", "content", "created_at"} <= set(r)
+               for r in result.data["recaps"])
+
+
+def test_get_events_returns_compact_digests_newest_first(ctx):
+    registry.execute("set_scene", ctx, description="A quiet tavern")
+    registry.execute("update_quest", ctx, slug="key", title="Find the Key")
+    result = registry.execute("get_events", ctx, limit=1)
+    assert result.ok and result.gm_only
+    events = result.data["events"]
+    assert len(events) == 1
+    # newest first, and the get_events call itself is not in its own tail
+    assert events[0]["command"] == "update_quest"
+    assert events[0]["ok"] is True
+    assert "Find the Key" in events[0]["digest"]
+    assert {"id", "command", "ok", "digest", "created_at"} <= set(events[0])
+
+
+def test_get_events_nonpositive_limit_refused_and_overlarge_clamped(ctx):
+    result = registry.execute("get_events", ctx, limit=0)
+    assert result.ok is False
+
+    registry.execute("set_scene", ctx, description="A quiet tavern")
+    result = registry.execute("get_events", ctx, limit=5000)
+    assert result.ok
+    assert result.data["limit"] == 100
+
+
+def test_get_events_tail_includes_crash_events(ctx):
+    def _boom(inner_ctx, **kwargs):
+        raise KeyError("damage_type")
+
+    registry._COMMANDS["_test_boom_tail"] = _boom
+    try:
+        with pytest.raises(KeyError):
+            registry.execute("_test_boom_tail", ctx, target="Goblin 2")
+    finally:
+        del registry._COMMANDS["_test_boom_tail"]
+
+    result = registry.execute("get_events", ctx)
+    crash = result.data["events"][0]
+    assert crash["command"] == "_test_boom_tail"
+    assert crash["ok"] is False
+    assert "ENGINE CRASH" in crash["digest"]

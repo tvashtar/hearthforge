@@ -435,3 +435,24 @@ def test_scene_state_without_combat(ctx):
     assert state.ok
     assert state.data["combat"] is None
     assert "clock" in state.data
+
+
+def test_scene_state_lists_npcs_at_current_location(ctx):
+    registry.execute("create_location", ctx, slug="greenhollow", name="Greenhollow",
+                     description="A sleepy town", region="valley")
+    registry.execute("create_npc", ctx, name="Elowen", disposition="friendly",
+                     location_slug="greenhollow")
+    registry.execute("create_npc", ctx, name="Bram", disposition="hostile",
+                     location_slug="elsewhere")
+    registry.execute("set_scene", ctx, description="Market day",
+                     location_slug="greenhollow")
+
+    state = registry.execute("get_scene_state", ctx)
+    assert state.data["npcs_present"] == [
+        {"name": "Elowen", "disposition": "friendly"}
+    ]
+
+
+def test_scene_state_npcs_present_empty_without_location(ctx):
+    state = registry.execute("get_scene_state", ctx)
+    assert state.data["npcs_present"] == []

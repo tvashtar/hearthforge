@@ -452,6 +452,13 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
             "budgets": budgets,
         }
 
+    npcs_present = []
+    if clock.get("location_slug"):
+        npcs_present = [
+            {"name": n["name"], "disposition": n["disposition"]}
+            for n in ctx.store.npcs(clock["location_slug"])
+        ]
+
     return CommandResult(
         ok=True, command="get_scene_state",
         digest="Scene state", gm_only=True,
@@ -459,6 +466,7 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
             "clock": clock,
             "location": location,
             "scene": clock.get("scene"),
+            "npcs_present": npcs_present,
             "combat": combat_payload,
         },
     )

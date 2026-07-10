@@ -389,6 +389,29 @@ class CampaignStore:
         row = self.conn.execute("SELECT id FROM npcs WHERE name = ?", (name,)).fetchone()
         return int(row["id"])
 
+    def get_npc(self, name: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM npcs WHERE name = ?", (name,)).fetchone()
+        if row is None:
+            return None
+        npc = dict(row)
+        npc["notes"] = json.loads(npc["notes"])
+        return npc
+
+    def npcs(self, location_slug: str | None = None) -> list[dict]:
+        if location_slug is None:
+            rows = self.conn.execute("SELECT * FROM npcs ORDER BY name").fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM npcs WHERE location_slug = ? ORDER BY name",
+                (location_slug,),
+            ).fetchall()
+        out = []
+        for r in rows:
+            npc = dict(r)
+            npc["notes"] = json.loads(npc["notes"])
+            out.append(npc)
+        return out
+
     def upsert_location(self, slug: str, name: str, description: str,
                         region: str | None) -> None:
         self.conn.execute(
@@ -401,6 +424,10 @@ class CampaignStore:
     def get_location(self, slug: str) -> dict | None:
         row = self.conn.execute("SELECT * FROM locations WHERE slug = ?", (slug,)).fetchone()
         return dict(row) if row else None
+
+    def locations(self) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM locations ORDER BY slug").fetchall()
+        return [dict(r) for r in rows]
 
     def upsert_quest(self, slug: str, title: str, status: str, notes: str) -> None:
         self.conn.execute(
@@ -445,3 +472,27 @@ class CampaignStore:
             "SELECT * FROM session_recaps ORDER BY id DESC LIMIT 1"
         ).fetchone()
         return dict(row) if row else None
+
+    def recaps(self) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM session_recaps ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def events_tail(self, limit: int) -> list[dict]:
+        """Newest-first compact projection of the event log; `ok`/`digest`
+        come out of the stored result envelope, not the full row."""
+        rows = self.conn.execute(
+            "SELECT id, command, result, created_at FROM event_log"
+            " ORDER BY id DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        out = []
+        for r in rows:
+            result = json.loads(r["result"])
+            out.append({
+                "id": r["id"],
+                "command": r["command"],
+                "ok": result.get("ok"),
+                "digest": result.get("digest"),
+                "created_at": r["created_at"],
+            })
+        return out

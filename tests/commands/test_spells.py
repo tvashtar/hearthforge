@@ -169,6 +169,106 @@ def test_aoe_into_empty_band_refuses_and_keeps_slot(ctx):
     assert after["spell_slots"]["1"]["remaining"] == before["spell_slots"]["1"]["remaining"]
 
 
+def _grant_spells(ctx, name, *slugs):
+    char = ctx.store.get_character(name)
+    known = char["spells_known"] + [s for s in slugs if s not in char["spells_known"]]
+    ctx.store.update_character(char["id"], spells_known=known)
+    ctx.store.conn.commit()
+
+
+def test_sleep_has_no_damage_type_and_resolves_as_tier2(ctx):
+    # sleep's SRD record carries a damage block (the 5d8 HP pool) with no
+    # damage_type; it must hand off to dm_ruling, not KeyError in Tier 1.
+    _grant_spells(ctx, "Brother Aldric", "sleep")
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 2, "band": "near"}],
+                     pc_initiative=15)
+    before = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="sleep", band="near", spend="none")
+    assert result.ok, result.refusal
+    assert result.data["tier"] == 2 and result.data["needs_ruling"] is True
+    assert "5d8" in result.data["spell_text"] or result.data["spell_text"]
+    after = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    assert after == before - 1  # Tier 2 still spends the slot
+
+
+def test_ritual_cast_spends_no_slot_and_advances_clock(ctx):
+    _grant_spells(ctx, "Brother Aldric", "detect-poison-and-disease")
+    before_slots = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    before_clock = ctx.store.world_clock()
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="detect-poison-and-disease", ritual=True)
+    assert result.ok, result.refusal
+    assert result.data["ritual"] is True
+    assert result.data["slot_used"] is None
+    assert result.data["tier"] == 2 and result.data["needs_ruling"] is True
+    after_slots = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    assert after_slots == before_slots  # no slot consumed
+    after_clock = ctx.store.world_clock()
+    elapsed = (after_clock["day"] - before_clock["day"]) * 1440 + (
+        after_clock["minutes"] - before_clock["minutes"])
+    assert elapsed == 10  # +10 minutes casting time
+
+
+def test_ritual_clock_overflow_rolls_the_day(ctx):
+    _grant_spells(ctx, "Brother Aldric", "detect-poison-and-disease")
+    ctx.store.update_world_clock(day=3, minutes=1435)  # 5 min to midnight
+    ctx.store.conn.commit()
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="detect-poison-and-disease", ritual=True)
+    assert result.ok, result.refusal
+    clock = ctx.store.world_clock()
+    assert clock["day"] == 4 and clock["minutes"] == 5
+
+
+def test_ritual_refuses_non_ritual_spell(ctx):
+    before = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="cure-wounds", targets=["Kira"],
+                              ritual=True)
+    assert result.ok is False
+    assert "not a ritual" in result.refusal
+    assert _aldric_state(ctx)["spell_slots"]["1"]["remaining"] == before
+
+
+def test_ritual_refuses_in_combat(ctx):
+    _grant_spells(ctx, "Brother Aldric", "detect-poison-and-disease")
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="detect-poison-and-disease", ritual=True)
+    assert result.ok is False
+    assert "combat" in result.refusal
+
+
+def test_ritual_refuses_class_without_ritual_casting(ctx):
+    # A sorcerer knows detect-magic but has no Ritual Casting feature (2014).
+    registry.execute(
+        "create_character", ctx, name="Vex", role="companion",
+        class_slug="sorcerer", race_slug="human",
+        abilities={"str": 8, "dex": 14, "con": 12, "int": 10, "wis": 10, "cha": 16},
+        ac=12, proficiencies={"skills": ["arcana"]},
+        attacks=[{"weapon": "dagger", "name": "dagger"}],
+        spells_known=["detect-magic"],
+    )
+    result = registry.execute("cast_spell", ctx, caster="Vex",
+                              spell_slug="detect-magic", ritual=True)
+    assert result.ok is False
+    assert "no Ritual Casting feature" in result.refusal
+
+
+def test_ritual_still_sets_concentration(ctx):
+    # detect-magic is both a ritual and a concentration spell.
+    _grant_spells(ctx, "Brother Aldric", "detect-magic")
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="detect-magic", ritual=True)
+    assert result.ok, result.refusal
+    aldric = ctx.store.get_character("Brother Aldric")
+    assert ctx.store.get_resources(aldric["id"])["concentration"]["spell"] == "detect-magic"
+
+
 def test_unknown_spell_and_not_known_refuse(ctx):
     missing = registry.execute("cast_spell", ctx, caster="Brother Aldric",
                                spell_slug="wish")

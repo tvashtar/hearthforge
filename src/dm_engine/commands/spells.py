@@ -1,9 +1,16 @@
 """Spell casting: tiered resolution.
 
-Tier 1 spells carry mechanical data (`damage` or `heal_at_slot_level`) the
-engine resolves fully — a heal, a spell attack vs AC, or a saving-throw
-effect. Tier 2 spells have no such data; the slot and concentration are spent
-and the effect is handed to the DM via `dm_ruling`.
+Tier 1 spells carry mechanical data (`damage` with a `damage_type`, or
+`heal_at_slot_level`) the engine resolves fully — a heal, a spell attack vs
+AC, or a saving-throw effect. Tier 2 spells have no such data; the slot and
+concentration are spent and the effect is handed to the DM via `dm_ruling`.
+A `damage` block without a `damage_type` (sleep's HP pool, prismatic spray's
+per-ray types) is not resolvable mechanics — those spells are Tier 2.
+
+Ritual casting (`ritual=True`): 2014 Ritual Casting classes (bard, cleric,
+druid, wizard) cast a spell with the ritual tag at base level without
+spending a slot, at +10 minutes on the world clock. Impossible while combat
+is active.
 
 AoE cluster cap: `max_targets = max(1, aoe_size_ft // 5)`, capped at 8
 (burning hands 15-ft cone -> 3; fireball 20-ft sphere -> 4). This is the FC-4
@@ -44,6 +51,8 @@ SPELLCASTING_ABILITY = {
 }
 
 _SPENDS = ("action", "bonus_action", "reaction", "none")
+# Classes with the 2014 Ritual Casting feature (among the castable classes).
+_RITUAL_CASTERS = {"bard", "cleric", "druid", "wizard"}
 _ORDINALS = {
     1: "1st", 2: "2nd", 3: "3rd", 4: "4th", 5: "5th",
     6: "6th", 7: "7th", 8: "8th", 9: "9th",
@@ -163,6 +172,7 @@ def cast_spell(
     targets: list[str] = [],  # noqa: B006 (frozen contract; never mutated)
     band: str | None = None,
     spend: str = "action",
+    ritual: bool = False,
     player_attack_value: int | None = None,
     player_damage_value: int | None = None,
     player_save_values: dict[str, int] | None = None,
@@ -187,10 +197,24 @@ def cast_spell(
     prof = proficiency_bonus(char["level"])
     is_cantrip = record.level == 0
 
-    # Step 2: slot validation (cantrips ignore slots).
+    # Step 2: ritual validation (2014 Ritual Casting: no slot, +10 minutes,
+    # base level only) — or slot validation (cantrips ignore slots).
+    if ritual:
+        if not record.ritual:
+            return refuse("cast_spell", f"{record.name} is not a ritual")
+        if char["class_slug"] not in _RITUAL_CASTERS:
+            return refuse(
+                "cast_spell",
+                f"{char['class_slug']} has no Ritual Casting feature",
+            )
+        if ctx.store.combat()["active"]:
+            return refuse(
+                "cast_spell",
+                "a ritual takes 10 extra minutes to cast — impossible in combat",
+            )
     res = ctx.store.get_resources(cid)
     slots = res["spell_slots"]
-    if is_cantrip:
+    if is_cantrip or ritual:
         slot_level = None
     else:
         slot_level = slot_level or record.level
@@ -267,7 +291,7 @@ def cast_spell(
             return refuse("cast_spell", f"{record.name} has no healing at that slot")
         if _heal_target_cid(ctx, targets[0]) is None:
             return refuse("cast_spell", f"no character named {targets[0]!r} to heal")
-    elif "damage" in extra:
+    elif _is_tier1_damage(extra):
         if _damage_notation(extra, slot_level, char["level"]) is None:
             return refuse("cast_spell", f"{record.name} has no damage at that level")
         if extra.get("attack_type"):
@@ -283,7 +307,15 @@ def cast_spell(
                 return refuse("cast_spell", resolved)
 
     # Step 5: consume the slot (validation passed; nothing below refuses).
-    if not is_cantrip:
+    # A ritual spends time instead: +10 minutes on the world clock, advanced
+    # before concentration stamps its start time.
+    if ritual:
+        clock = ctx.store.world_clock()
+        day_overflow, minutes = divmod(clock["minutes"] + 10, 1440)
+        ctx.store.update_world_clock(
+            day=clock["day"] + day_overflow, minutes=minutes
+        )
+    elif not is_cantrip:
         slots[str(slot_level)]["remaining"] -= 1
         ctx.store.update_resources(cid, spell_slots=slots)
 
@@ -311,6 +343,8 @@ def cast_spell(
         ctx.store.update_combat(combatants=combatants)
 
     base_data = {"slot_used": slot_level}
+    if ritual:
+        base_data["ritual"] = True
     if concentration_replaced is not None:
         base_data["concentration_replaced"] = concentration_replaced
 
@@ -322,7 +356,7 @@ def cast_spell(
         )
 
     # Step 7: Tier 1 — damage (spell attack or saving throw).
-    if "damage" in extra:
+    if _is_tier1_damage(extra):
         return _resolve_damage(
             ctx, caster, record, extra, slot_level, targets, band, ability,
             abil_mod, prof, char["level"], is_pc, is_cantrip,
@@ -331,7 +365,8 @@ def cast_spell(
 
     # Step 8: Tier 2 — no mechanical effect; hand to the DM.
     slot_note = (
-        f" ({_ordinal(slot_level)}-level slot)" if slot_level else " (cantrip)"
+        f" ({_ordinal(slot_level)}-level slot)" if slot_level
+        else (" (ritual, no slot)" if ritual else " (cantrip)")
     )
     data = {
         **base_data, "tier": 2, "needs_ruling": True,
@@ -362,6 +397,15 @@ def _resolve_heal(
         f"{frag['healed']} (hp {frag['hp']})"
     )
     return CommandResult(ok=True, command="cast_spell", digest=digest, data=data)
+
+
+def _is_tier1_damage(extra: dict) -> bool:
+    """Whether a spell's damage block is engine-resolvable (Tier 1).
+
+    Requires a `damage_type`: sleep (HP pool) and prismatic spray (per-ray
+    types) carry `damage` without one and must fall through to Tier 2.
+    """
+    return "damage" in extra and "damage_type" in extra["damage"]
 
 
 def _damage_notation(

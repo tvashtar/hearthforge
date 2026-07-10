@@ -141,3 +141,31 @@ def checkpoint(ctx: CommandContext, content: str, **kwargs) -> CommandResult:
         ok=True, command="checkpoint", digest="Checkpoint saved", gm_only=True,
         data={"content": content},
     )
+
+
+@command("list_recaps")
+def list_recaps(ctx: CommandContext, **kwargs) -> CommandResult:
+    recaps = [
+        {"kind": r["kind"], "content": r["content"], "created_at": r["created_at"]}
+        for r in ctx.store.recaps()
+    ]
+    return CommandResult(
+        ok=True, command="list_recaps", digest=f"{len(recaps)} recap(s)",
+        gm_only=True, data={"recaps": recaps},
+    )
+
+
+_EVENTS_TAIL_MAX = 100
+
+
+@command("get_events")
+def get_events(ctx: CommandContext, limit: int = 20, **kwargs) -> CommandResult:
+    if limit < 1:
+        return refuse("get_events", "limit must be positive")
+    limit = min(limit, _EVENTS_TAIL_MAX)
+    events = ctx.store.events_tail(limit)
+    return CommandResult(
+        ok=True, command="get_events",
+        digest=f"Last {len(events)} event(s)", gm_only=True,
+        data={"events": events, "limit": limit},
+    )

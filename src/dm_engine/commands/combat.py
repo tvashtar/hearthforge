@@ -36,6 +36,8 @@ from dm_engine.state.models import Combatant
 
 _SPEED_RE = re.compile(r"(\d+)")
 
+_MONSTER_ENTRY_FIELDS = {"slug", "count", "band", "label"}
+
 
 def _monster_speed(record) -> int:
     """Parse walk speed (e.g. '30 ft.') from a monster record; default 30."""
@@ -108,17 +110,34 @@ def start_combat(
     if pc_initiative is not None and not (1 <= pc_initiative <= 20):
         return refuse("start_combat", f"pc_initiative must be 1-20: {pc_initiative!r}")
 
-    # Resolve monster records first so an unknown slug refuses before any work.
-    resolved: list[tuple[str, Band, object]] = []
+    # Resolve monster records first so bad input refuses before any work.
+    # Entries take slug (required), count, band, and label — a display-name
+    # alias (numbered per instance when count > 1). Anything else refuses.
+    resolved: list[tuple[str, Band, object, str | None]] = []
     for entry in monsters:
-        slug = entry["slug"]
+        unknown = sorted(set(entry) - _MONSTER_ENTRY_FIELDS)
+        if unknown:
+            return refuse(
+                "start_combat",
+                f"unknown monster entry fields {unknown!r} "
+                "(allowed: slug, count, band, label)",
+            )
+        slug = entry.get("slug")
+        if not slug:
+            return refuse("start_combat", "monster entry is missing 'slug'")
         record = ctx.rules.get_monster(slug)
         if record is None:
             return refuse("start_combat", f"unknown monster {slug!r}")
         count = entry.get("count", 1)
+        if not isinstance(count, int) or count < 1:
+            return refuse("start_combat", f"count must be a positive integer: {count!r}")
         band = entry.get("band", "near")
-        for _ in range(count):
-            resolved.append((slug, band, record))
+        if band not in BAND_ORDER:
+            return refuse("start_combat", f"unknown band {band!r}")
+        label = entry.get("label")
+        for i in range(count):
+            name = label if label is None or count == 1 else f"{label} {i + 1}"
+            resolved.append((slug, band, record, name))
 
     active_party = [c for c in ctx.store.party() if c["status"] == "active"]
     if not active_party:
@@ -136,20 +155,33 @@ def start_combat(
             character_id=char["id"], initiative=0,
             dex_modifier=ability_modifier(char["abilities"]["dex"]),
             ac=char["ac"], band="near",
-            surprised=char["name"] in surprise,
         ))
         _ = res  # hp/conditions stay in the tables; not duplicated here
 
     counters: dict[str, int] = {}
-    for slug, band, record in resolved:
+    for slug, band, record, label in resolved:
         counters[slug] = counters.get(slug, 0) + 1
         key = f"{slug}-{counters[slug]}"
         combatants.append(Combatant(
-            key=key, kind="monster", name=record.name, monster_slug=slug,
+            key=key, kind="monster", name=label or record.name, monster_slug=slug,
             initiative=0, dex_modifier=ability_modifier(record.dexterity),
             ac=record.ac, hp=record.hit_points, max_hp=record.hit_points,
-            xp=record.xp, band=band, surprised=key in surprise,
+            xp=record.xp, band=band,
         ))
+
+    # Surprise entries match a combatant key or display name (label); an
+    # entry matching nothing refuses here, before initiative dice are rolled
+    # or any state is written — silently dropping it would skip surprise.
+    for entry in surprise:
+        matched = [c for c in combatants if entry in (c.key, c.name)]
+        if not matched:
+            known = ", ".join(sorted({c.key for c in combatants} | {c.name for c in combatants}))
+            return refuse(
+                "start_combat",
+                f"surprise entry {entry!r} matches no combatant (known: {known})",
+            )
+        for c in matched:
+            c.surprised = True
 
     # Initiative: PC uses its reported natural; monsters roll hidden (gm_only).
     seq = [(c.key, c.dex_modifier) for c in combatants]
@@ -179,7 +211,8 @@ def start_combat(
     )
 
     order_summary = [
-        {"key": c["key"], "initiative": c["initiative"], "kind": c["kind"]}
+        {"key": c["key"], "name": c["name"], "initiative": c["initiative"],
+         "kind": c["kind"]}
         for c in dumps
     ]
     monster_count = sum(1 for c in dumps if c["kind"] == "monster")
@@ -195,6 +228,7 @@ def start_combat(
             "round": 1,
             "active": dumps[0]["key"],
             "surprise": list(surprise),
+            "surprised": [c["key"] for c in dumps if c["surprised"]],
             "encounter": assessment.model_dump(),
         },
     )
@@ -418,6 +452,13 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
             "budgets": budgets,
         }
 
+    npcs_present = []
+    if clock.get("location_slug"):
+        npcs_present = [
+            {"name": n["name"], "disposition": n["disposition"]}
+            for n in ctx.store.npcs(clock["location_slug"])
+        ]
+
     return CommandResult(
         ok=True, command="get_scene_state",
         digest="Scene state", gm_only=True,
@@ -425,6 +466,7 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
             "clock": clock,
             "location": location,
             "scene": clock.get("scene"),
+            "npcs_present": npcs_present,
             "combat": combat_payload,
         },
     )

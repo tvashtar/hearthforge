@@ -65,6 +65,53 @@ def create_npc(
     )
 
 
+@command("get_npc")
+def get_npc(ctx: CommandContext, name: str, **kwargs) -> CommandResult:
+    npc = ctx.store.get_npc(name)
+    if npc is None:
+        known = ", ".join(n["name"] for n in ctx.store.npcs()) or "none recorded"
+        return refuse("get_npc", f"unknown NPC {name!r} (known: {known})")
+    where = f" at {npc['location_slug']}" if npc["location_slug"] else ""
+    return CommandResult(
+        ok=True, command="get_npc", gm_only=True,
+        digest=f"NPC {npc['name']}: {npc['disposition']}{where}",
+        data={"npc": {"name": npc["name"], "disposition": npc["disposition"],
+                      "location_slug": npc["location_slug"], "notes": npc["notes"]}},
+    )
+
+
+@command("list_npcs")
+def list_npcs(
+    ctx: CommandContext, location_slug: str | None = None, **kwargs
+) -> CommandResult:
+    if location_slug is not None and ctx.store.get_location(location_slug) is None:
+        return refuse("list_npcs", f"unknown location {location_slug!r}")
+    compact = [
+        {"name": n["name"], "disposition": n["disposition"],
+         "location_slug": n["location_slug"]}
+        for n in ctx.store.npcs(location_slug)
+    ]
+    where = f" at {location_slug}" if location_slug else ""
+    return CommandResult(
+        ok=True, command="list_npcs",
+        digest=f"{len(compact)} NPC(s) known{where}",
+        data={"npcs": compact, "location_slug": location_slug},
+    )
+
+
+@command("list_locations")
+def list_locations(ctx: CommandContext, **kwargs) -> CommandResult:
+    compact = [
+        {"slug": loc["slug"], "name": loc["name"], "region": loc["region"]}
+        for loc in ctx.store.locations()
+    ]
+    return CommandResult(
+        ok=True, command="list_locations",
+        digest=f"{len(compact)} location(s) known",
+        data={"locations": compact},
+    )
+
+
 @command("create_location")
 def create_location(
     ctx: CommandContext, slug: str, name: str, description: str,

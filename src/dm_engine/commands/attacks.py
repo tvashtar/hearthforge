@@ -31,7 +31,7 @@ from dm_engine.rules.character_build import attack_damage_mod, attack_to_hit
 from dm_engine.rules.checks import combine_advantage
 from dm_engine.rules.concentration import concentration_save_dc
 from dm_engine.rules.conditions import CONDITIONS, attack_interaction, effects_for
-from dm_engine.rules.damage import apply_mitigation
+from dm_engine.rules.damage import apply_mitigation, defense_entry_applies
 from dm_engine.rules.death import DeathSaveState, apply_damage_while_dying
 
 _SPENDS = ("action", "reaction", "none")
@@ -50,21 +50,32 @@ def _effects_for_combatant(ctx: CommandContext, combatant: dict):
     return effects_for(combatant["conditions"])
 
 
-def _monster_defense_sets(record, damage_type: str):
+def _monster_defense_sets(record, damage_type: str, *, is_magical: bool = False):
     """Resistance/vulnerability/immunity sets for a damage type against a
     monster record. Entries may be compound phrases (e.g. 'bludgeoning,
-    piercing, and slashing from nonmagical weapons') — match if the type
-    appears anywhere in any entry."""
+    piercing, and slashing from nonmagical weapons') — caveat matching,
+    including the nonmagical-weapon bypass for magical attacks, lives in
+    `rules.damage.defense_entry_applies`."""
     extra = record.model_extra or {}
 
     def matches(field: str) -> bool:
-        return any(damage_type in entry.lower() for entry in extra.get(field, []))
+        return any(
+            defense_entry_applies(entry, damage_type, is_magical=is_magical)
+            for entry in extra.get(field, [])
+        )
 
     return (
         {damage_type} if matches("damage_resistances") else set(),
         {damage_type} if matches("damage_vulnerabilities") else set(),
         {damage_type} if matches("damage_immunities") else set(),
     )
+
+
+def _monster_weapons_are_magical(record) -> bool:
+    """SRD monsters with magic weapon attacks carry a 'Magic Weapons'
+    special ability ("The <monster>'s weapon attacks are magical.")."""
+    abilities = (record.model_extra or {}).get("special_abilities") or []
+    return any((sa.get("name") or "").lower() == "magic weapons" for sa in abilities)
 
 
 def _break_concentration(ctx: CommandContext, cid: int) -> bool:
@@ -267,6 +278,7 @@ def attack(
         spec_ranged = spec["ranged"]
         range_ft = spec["range_ft"]
         long_range_ft = spec.get("long_range_ft")
+        attack_is_magical = "magical" in (spec.get("properties") or [])
         is_pc = char["role"] == "pc"
     else:
         record = ctx.rules.get_monster(atk["monster_slug"])
@@ -299,6 +311,7 @@ def attack(
             spec_ranged = False
             range_ft = 5
             long_range_ft = None
+        attack_is_magical = _monster_weapons_are_magical(record)
         is_pc = False
 
     # Step 4: player-supplied values (PC attackers only).
@@ -385,7 +398,7 @@ def attack(
     if tgt["kind"] == "monster":
         record = ctx.rules.get_monster(tgt["monster_slug"])
         resistances, vulnerabilities, immunities = _monster_defense_sets(
-            record, damage_type
+            record, damage_type, is_magical=attack_is_magical
         )
     else:
         res = ctx.store.get_resources(tgt["character_id"])

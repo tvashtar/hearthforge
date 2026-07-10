@@ -115,3 +115,62 @@ def test_update_quest_invalid_status_refused(ctx):
     assert result.ok is False
     assert "bogus" in result.refusal
     assert ctx.store.quests() == []
+
+
+# -- read-only recall commands ------------------------------------------
+
+
+def _seed_world(ctx):
+    registry.execute("create_location", ctx, slug="greenhollow", name="Greenhollow",
+                     description="A sleepy town", region="valley")
+    registry.execute("create_location", ctx, slug="mill", name="Old Mill",
+                     description="Creaky", region="valley")
+    registry.execute("create_npc", ctx, name="Elowen", disposition="friendly",
+                     location_slug="greenhollow", notes={"secret": "knows the sigil"})
+    registry.execute("create_npc", ctx, name="Bram", disposition="hostile",
+                     location_slug="mill")
+
+
+def test_get_npc_returns_full_record(ctx):
+    _seed_world(ctx)
+    result = registry.execute("get_npc", ctx, name="Elowen")
+    assert result.ok and result.gm_only
+    assert result.data["npc"]["disposition"] == "friendly"
+    assert result.data["npc"]["location_slug"] == "greenhollow"
+    assert result.data["npc"]["notes"] == {"secret": "knows the sigil"}
+
+
+def test_get_npc_unknown_name_refused_listing_known(ctx):
+    _seed_world(ctx)
+    result = registry.execute("get_npc", ctx, name="Elowyn")
+    assert result.ok is False
+    assert "Elowyn" in result.refusal
+    assert "Elowen" in result.refusal and "Bram" in result.refusal
+
+
+def test_list_npcs_all_and_filtered_by_location(ctx):
+    _seed_world(ctx)
+    everyone = registry.execute("list_npcs", ctx)
+    assert everyone.ok
+    assert [n["name"] for n in everyone.data["npcs"]] == ["Bram", "Elowen"]
+    assert all(set(n) == {"name", "disposition", "location_slug"}
+               for n in everyone.data["npcs"])
+
+    local = registry.execute("list_npcs", ctx, location_slug="mill")
+    assert [n["name"] for n in local.data["npcs"]] == ["Bram"]
+
+
+def test_list_npcs_unknown_location_refused(ctx):
+    _seed_world(ctx)
+    result = registry.execute("list_npcs", ctx, location_slug="atlantis")
+    assert result.ok is False
+    assert "atlantis" in result.refusal
+
+
+def test_list_locations_returns_compact_records(ctx):
+    _seed_world(ctx)
+    result = registry.execute("list_locations", ctx)
+    assert result.ok
+    assert [loc["slug"] for loc in result.data["locations"]] == ["greenhollow", "mill"]
+    assert all(set(loc) == {"slug", "name", "region"}
+               for loc in result.data["locations"])

@@ -27,6 +27,11 @@ def _boom(ctx, **kwargs) -> CommandResult:
     raise RuntimeError("engine bug")
 
 
+def _boom_after_roll(ctx, **kwargs) -> CommandResult:
+    ctx.roller.roll("1d20")
+    raise KeyError("damage_type")
+
+
 def _roll(ctx, **kwargs) -> CommandResult:
     r = ctx.roller.roll("2d6", player_value=kwargs.get("player_value"))
     return CommandResult(ok=True, command="_test_roll", digest=f"rolled {r.total}",
@@ -52,6 +57,7 @@ def _register_test_commands():
         "_test_echo": _echo,
         "_test_refuse": _refuse,
         "_test_boom": _boom,
+        "_test_boom_after_roll": _boom_after_roll,
         "_test_roll": _roll,
         "_test_roll_many_d6": _roll_many_d6,
     }
@@ -85,11 +91,37 @@ def test_refusals_are_logged(ctx):
     assert ctx.store.event_count() == 1
 
 
-def test_handler_exception_rolls_back_everything(ctx):
+def test_handler_exception_rolls_back_state_but_logs_crash_event(ctx):
     with pytest.raises(RuntimeError):
-        execute("_test_boom", ctx)
+        execute("_test_boom", ctx, target="Goblin 2")
     assert ctx.store.get_location("half") is None   # state rolled back
-    assert ctx.store.event_count() == 0             # no event row either
+
+    # ...but the audit log has no hole: a crash event was committed separately.
+    assert ctx.store.event_count() == 1
+    row = ctx.store.conn.execute(
+        "SELECT command, inputs, result, is_ruling FROM event_log WHERE id = 1"
+    ).fetchone()
+    assert row["command"] == "_test_boom"
+    assert row["is_ruling"] == 0
+    assert json.loads(row["inputs"]) == {"target": "Goblin 2"}
+    result = json.loads(row["result"])
+    assert result["ok"] is False
+    assert result["data"]["crash"] is True
+    assert result["data"]["exception_type"] == "RuntimeError"
+    assert result["data"]["exception_message"] == "engine bug"
+    assert "RuntimeError: engine bug" in result["data"]["traceback"]
+
+
+def test_crash_event_does_not_persist_rng_or_rolls(ctx):
+    """The state-rollback guarantee is untouched: dice drawn before the crash
+    are rolled back (re-drawn on replay), so the crash event records none and
+    the persisted RNG position stays put."""
+    with pytest.raises(KeyError):
+        execute("_test_boom_after_roll", ctx)
+    meta = ctx.store.campaign_meta()
+    assert meta["rng_draws"] == 0 and meta["rng_state"] is None
+    row = ctx.store.conn.execute("SELECT rolls FROM event_log WHERE id = 1").fetchone()
+    assert json.loads(row["rolls"]) == []
 
 
 def test_rolls_are_captured_and_draws_persisted(ctx):

@@ -269,6 +269,99 @@ def test_ritual_still_sets_concentration(ctx):
     assert ctx.store.get_resources(aldric["id"])["concentration"]["spell"] == "detect-magic"
 
 
+def _start_goblin_fight(ctx, count):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": count, "band": "near"}],
+                     pc_initiative=15)
+
+
+def test_magic_missile_rolls_three_independent_darts(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 1)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile", targets=["goblin-1"],
+                              spend="none")
+    assert result.ok, result.refusal
+    assert result.data["tier"] == 1 and result.data["darts"] == 3
+    per = result.data["per_target"]
+    assert len(per) == 3  # one entry per dart, all on the single target
+    assert "attack_roll" not in result.data  # auto-hit: no attack roll ...
+    for i, entry in enumerate(per, start=1):
+        assert entry["key"] == "goblin-1"
+        assert entry["dart"] == i and entry["hit"] is True
+        assert "save" not in entry  # ... and no save either
+        assert 2 <= entry["damage_rolled"] <= 5  # each dart is its own 1d4+1
+
+
+def test_magic_missile_upcast_adds_a_dart_and_spends_the_slot(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 1)
+    before = _aldric_state(ctx)["spell_slots"]
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile", slot_level=2,
+                              targets=["goblin-1"], spend="none")
+    assert result.ok, result.refusal
+    assert result.data["darts"] == 4  # +1 dart per slot level above 1st
+    assert len(result.data["per_target"]) == 4
+    after = _aldric_state(ctx)["spell_slots"]
+    assert after["2"]["remaining"] == before["2"]["remaining"] - 1
+    assert after["1"]["remaining"] == before["1"]["remaining"]
+
+
+def test_magic_missile_split_targets_assigns_per_dart(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 2)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile",
+                              targets=["goblin-1", "goblin-2", "goblin-1"],
+                              spend="none")
+    assert result.ok, result.refusal
+    keys = [e["key"] for e in result.data["per_target"]]
+    assert keys == ["goblin-1", "goblin-2", "goblin-1"]
+
+
+def test_magic_missile_bad_target_list_refuses_and_keeps_slot(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 2)
+    before = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    # 2 targets for 3 darts: neither "all on one" nor "one per dart".
+    wrong_len = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                                 spell_slug="magic-missile",
+                                 targets=["goblin-1", "goblin-2"], spend="none")
+    assert wrong_len.ok is False
+    assert "3 darts" in wrong_len.refusal
+    # A dart aimed at a non-combatant refuses too.
+    ghost = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                             spell_slug="magic-missile",
+                             targets=["goblin-1", "goblin-9", "goblin-1"],
+                             spend="none")
+    assert ghost.ok is False
+    assert "goblin-9" in ghost.refusal
+    no_target = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                                 spell_slug="magic-missile", spend="none")
+    assert no_target.ok is False
+    # Every refusal happened before the slot was consumed.
+    assert _aldric_state(ctx)["spell_slots"]["1"]["remaining"] == before
+
+
+def test_magic_missile_concentration_check_per_dart(ctx):
+    # Each dart that lands on a concentrating creature is its own hit and
+    # must raise its own concentration check (DC 10 for < 22 damage).
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 1)
+    bless = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                             spell_slug="bless", spend="none")
+    assert bless.ok, bless.refusal
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile",
+                              targets=["Brother Aldric"], spend="none")
+    assert result.ok, result.refusal
+    per = result.data["per_target"]
+    assert len(per) == 3
+    for entry in per:  # Aldric (hp 24) stays conscious through 3-15 damage
+        assert entry["concentration_check"] == {"dc": 10}
+
+
 def test_unknown_spell_and_not_known_refuse(ctx):
     missing = registry.execute("cast_spell", ctx, caster="Brother Aldric",
                                spell_slug="wish")

@@ -21,6 +21,14 @@ targeted band, in initiative order.
 Damage application and concentration follow-ups reuse `attacks`' shared sink
 (`apply_damage_to_target`) and helpers so spells and weapon attacks land damage
 identically.
+
+Dart spells (magic missile): the SRD record folds all darts into one notation
+("3d4 + 3"), but RAW each dart is a separate 1d4+1 auto-hit (no attack roll,
+no save) that can be aimed independently, and each hit triggers its own
+concentration check on the receiver. `_DART_SPELLS` overrides Tier-1
+resolution for these slugs: one `roll_damage` per dart through `ctx.roller`,
+one `apply_damage_to_target` per dart, one `per_target` entry per dart. The
+record's `damage_at_slot_level` keys still gate which slot levels are valid.
 """
 
 from __future__ import annotations
@@ -59,8 +67,48 @@ _ORDINALS = {
 }
 
 
+# Auto-hit dart spells: `darts` at the base level, +`per_upcast` per slot
+# level above it; each dart rolls `dart_damage` independently. No attack
+# roll, no save. `player_damage_value` is ignored for these — one reported
+# value cannot stand in for N independent dart rolls, so every dart is an
+# engine roll through ctx.roller.
+_DART_SPELLS = {
+    "magic-missile": {"darts": 3, "per_upcast": 1, "dart_damage": "1d4+1"},
+}
+
+
 def _ordinal(n: int) -> str:
     return _ORDINALS.get(n, f"{n}th")
+
+
+def _dart_count(spec: dict, base_level: int, slot_level: int | None) -> int:
+    return spec["darts"] + spec["per_upcast"] * ((slot_level or base_level) - base_level)
+
+
+def _assign_darts(combatants, targets, count, spell_name):
+    """Resolve one combatant dict per dart, or an error string to refuse with.
+
+    A single target takes every dart; otherwise the list is per-dart (one
+    entry each, repeats allowed) and must match the dart count exactly.
+    """
+    if not targets:
+        return f"{spell_name} needs a target for its darts"
+    if len(targets) == 1:
+        keys = [targets[0]] * count
+    elif len(targets) == count:
+        keys = list(targets)
+    else:
+        return (
+            f"{spell_name} fires {count} darts — give one target or exactly "
+            f"{count} (one per dart), not {len(targets)}"
+        )
+    chosen = []
+    for key in keys:
+        tc = next((c for c in combatants if c["key"] == key), None)
+        if tc is None:
+            return f"{key!r} is not a combatant to target"
+        chosen.append(tc)
+    return chosen
 
 
 def _heal_target_cid(ctx: CommandContext, key: str) -> int | None:
@@ -294,7 +342,13 @@ def cast_spell(
     elif _is_tier1_damage(extra):
         if _damage_notation(extra, slot_level, char["level"]) is None:
             return refuse("cast_spell", f"{record.name} has no damage at that level")
-        if extra.get("attack_type"):
+        dart_spec = _DART_SPELLS.get(spell_slug)
+        if dart_spec is not None:
+            count = _dart_count(dart_spec, record.level, slot_level)
+            resolved = _assign_darts(combatants, targets, count, record.name)
+            if isinstance(resolved, str):
+                return refuse("cast_spell", resolved)
+        elif extra.get("attack_type"):
             if not targets:
                 return refuse("cast_spell", f"{record.name} needs a target")
             if not any(c["key"] == targets[0] for c in combatants):
@@ -434,6 +488,44 @@ def _resolve_damage(
     damage_type = extra["damage"]["damage_type"]["index"]
     combat = ctx.store.combat()
     combatants = combat["combatants"] if combat["active"] else []
+
+    # -- auto-hit darts (magic missile) --------------------------------
+    # No attack roll and no save: every dart lands. One roll, one damage
+    # application, and one per_target entry per dart, so the shared damage
+    # sink raises a concentration check per dart on the receiving side.
+    spec = _DART_SPELLS.get(record.slug)
+    if spec is not None:
+        count = _dart_count(spec, record.level, slot_level)
+        resolved = _assign_darts(combatants, targets, count, record.name)
+        if isinstance(resolved, str):
+            # Unreachable when called via cast_spell (step 4 validated this
+            # before the slot was spent); kept as a defensive refusal.
+            return refuse("cast_spell", resolved)
+        per_target = []
+        total = 0
+        for i, tc in enumerate(resolved, start=1):
+            dmg = roll_damage(ctx.roller, spec["dart_damage"])
+            final = _mitigate(ctx, tc, dmg.total, damage_type)
+            frag = apply_damage_to_target(
+                ctx, tc["key"], final, damage_type, critical=False
+            )
+            entry = {
+                "key": tc["key"], "dart": i, "hit": True,
+                "damage_rolled": dmg.total, "damage": final, **frag["target"],
+            }
+            _copy_concentration_flags(frag, entry)
+            per_target.append(entry)
+            total += final
+        data = {
+            **base_data, "tier": 1, "effect": "damage", "darts": count,
+            "per_target": per_target,
+        }
+        hit_keys = ", ".join(dict.fromkeys(t["key"] for t in resolved))
+        digest = (
+            f"{caster} casts {record.name} — {count} darts hit {hit_keys} "
+            f"for {total} {damage_type} total"
+        )
+        return CommandResult(ok=True, command="cast_spell", digest=digest, data=data)
 
     # -- spell attack --------------------------------------------------
     if extra.get("attack_type"):

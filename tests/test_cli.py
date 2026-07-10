@@ -15,6 +15,14 @@ def test_version_reports_package_version():
     assert result.output.strip() == "0.1.0"
 
 
+def test_lookup_autoseeds_missing_rules_db(tmp_path):
+    db = tmp_path / "rules.sqlite"
+    result = runner.invoke(app, ["lookup", "monster", "aboleth", "--db", str(db)])
+    assert result.exit_code == 0
+    assert '"hit_points": 135' in result.output
+    assert db.exists()  # built on demand, no manual `dm seed` needed
+
+
 def test_seed_and_lookup_cli(tmp_path):
     db = tmp_path / "rules.sqlite"
     result = runner.invoke(app, ["seed", "--dest", str(db)])

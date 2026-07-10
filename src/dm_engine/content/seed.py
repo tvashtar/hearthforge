@@ -11,6 +11,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from dm_engine.content.lookup import DEFAULT_DB
 from dm_engine.content.markdown_sections import parse_sections
 from dm_engine.models.srd import MonsterRecord, SpellRecord
 
@@ -50,6 +51,22 @@ EDITION_META = [("edition", "2014"), ("srd_version", "5.1")]
 
 def _records(structured_dir: Path, filename: str) -> list[dict]:
     return json.loads((structured_dir / filename).read_text())
+
+
+def ensure_rules_db(dest: Path = DEFAULT_DB) -> Path:
+    """Build the rules DB from the vendored SRD sources iff `dest` is missing.
+
+    A present file is trusted and left untouched — `dm seed` is the explicit
+    rebuild path.
+    """
+    dest = Path(dest)
+    if not dest.exists():
+        repo_root = Path(__file__).resolve().parents[3]
+        srd = repo_root / "data" / "srd" / "2014"
+        build_rules_db(
+            structured_dir=srd / "structured", text_dir=srd / "text", dest=dest
+        )
+    return dest
 
 
 def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str, int]:

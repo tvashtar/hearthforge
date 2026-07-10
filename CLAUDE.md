@@ -15,7 +15,7 @@ commands and narrates results, never computing mechanical facts itself.
 
 ```bash
 uv sync                                   # install (uv project, Python >= 3.12)
-uv run dm seed                            # build data/build/rules.sqlite — REQUIRED before tests/play
+uv run dm seed                            # explicit rules-DB rebuild (runtime + tests auto-seed if missing)
 uv run pytest                             # full suite
 uv run pytest tests/commands/test_spells.py -k ritual   # single file / test
 uv run ruff check src tests              # lint (line length 100)

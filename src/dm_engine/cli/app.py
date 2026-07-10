@@ -10,6 +10,7 @@ from dm_engine.commands.campaign import bootstrap_campaign
 from dm_engine.commands.envelope import CommandResult
 from dm_engine.commands.registry import execute, open_campaign_context
 from dm_engine.content.lookup import DEFAULT_DB, RulesDB
+from dm_engine.content.seed import ensure_rules_db
 from dm_engine.state.sheets import render_character_sheet
 from dm_engine.state.store import CampaignStore
 
@@ -80,8 +81,8 @@ def new_campaign(
     skeleton = {"premise": f"{name} (created via CLI; skeleton to be written by the DM)"}
     try:
         ctx = bootstrap_campaign(
-            campaigns_dir, db, slug=slug, name=name, death_mode=death_mode,
-            skeleton=skeleton, seed=seed,
+            campaigns_dir, ensure_rules_db(db), slug=slug, name=name,
+            death_mode=death_mode, skeleton=skeleton, seed=seed,
         )
     except FileExistsError as exc:
         typer.echo(str(exc), err=True)
@@ -107,7 +108,7 @@ def resume_campaign(
 ) -> None:
     """Open a campaign (snapshotting it) and print the session brief."""
     try:
-        ctx = open_campaign_context(campaigns_dir, slug, db)
+        ctx = open_campaign_context(campaigns_dir, slug, ensure_rules_db(db))
     except (FileNotFoundError, sqlite3.OperationalError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
@@ -125,7 +126,7 @@ def lookup_rule(
     limit: int = typer.Option(5),
 ) -> None:
     """Full-text search the SRD rules prose."""
-    with RulesDB(db) as rules:
+    with RulesDB(ensure_rules_db(db)) as rules:
         for hit in rules.lookup_rule(query, limit=limit):
             typer.echo(f"## {hit.heading_path}  ({hit.source})")
             typer.echo(hit.snippet)
@@ -135,7 +136,7 @@ def lookup_rule(
 @lookup_app.command("monster")
 def lookup_monster(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
     """Print a monster's full record by slug (e.g. 'aboleth')."""
-    with RulesDB(db) as rules:
+    with RulesDB(ensure_rules_db(db)) as rules:
         monster = rules.get_monster(slug)
     if monster is None:
         typer.echo(f"no monster with slug {slug!r}", err=True)
@@ -146,7 +147,7 @@ def lookup_monster(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
 @lookup_app.command("spell")
 def lookup_spell(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
     """Print a spell's full record by slug (e.g. 'magic-missile')."""
-    with RulesDB(db) as rules:
+    with RulesDB(ensure_rules_db(db)) as rules:
         spell = rules.get_spell(slug)
     if spell is None:
         typer.echo(f"no spell with slug {slug!r}", err=True)
@@ -189,7 +190,7 @@ def mcp(
 
     from dm_engine.mcp.server import run_stdio
 
-    anyio.run(run_stdio, campaigns_dir, db)
+    anyio.run(run_stdio, campaigns_dir, ensure_rules_db(db))
 
 
 @app.command("cmd")
@@ -216,7 +217,7 @@ def cmd(
         typer.echo(f"invalid --json payload: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     try:
-        ctx = open_campaign_context(campaigns_dir, campaign, db)
+        ctx = open_campaign_context(campaigns_dir, campaign, ensure_rules_db(db))
     except (FileNotFoundError, sqlite3.OperationalError) as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc

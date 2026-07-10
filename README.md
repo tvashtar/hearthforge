@@ -8,6 +8,14 @@ only issues commands and narrates the results. Play happens inside
 [Claude Code](https://claude.com/claude-code), driven by the `dm-session`
 skill.
 
+**Local-first, solo by design.** Apart from Claude Code itself, everything
+runs and stays on your machine: campaigns, characters, dice audit logs, and
+the rules database are SQLite files in this directory, and nothing is sent
+to any external API. The MCP server is a local subprocess Claude Code talks
+to over stdio — it never reaches out to an external service. (The only
+other network use is optional: `scripts/sync_srd.py`, if you choose to
+re-fetch the vendored SRD data from GitHub.)
+
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (Python 3.12+ is fetched automatically)

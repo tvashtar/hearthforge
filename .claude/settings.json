@@ -1,0 +1,45 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__dm-engine__lookup_rule",
+      "mcp__dm-engine__lookup_monster",
+      "mcp__dm-engine__lookup_spell",
+      "mcp__dm-engine__get_character_sheet",
+      "mcp__dm-engine__get_campaign_brief",
+      "mcp__dm-engine__get_scene_state",
+      "mcp__dm-engine__open_campaign",
+      "mcp__dm-engine__attack",
+      "mcp__dm-engine__skill_check",
+      "mcp__dm-engine__tool_check",
+      "mcp__dm-engine__saving_throw",
+      "mcp__dm-engine__death_save",
+      "mcp__dm-engine__cast_spell",
+      "mcp__dm-engine__apply_condition",
+      "mcp__dm-engine__remove_condition",
+      "mcp__dm-engine__break_concentration",
+      "mcp__dm-engine__start_combat",
+      "mcp__dm-engine__next_turn",
+      "mcp__dm-engine__move",
+      "mcp__dm-engine__engage",
+      "mcp__dm-engine__end_combat",
+      "mcp__dm-engine__roll_dice",
+      "mcp__dm-engine__dm_ruling",
+      "mcp__dm-engine__rest",
+      "mcp__dm-engine__use_item",
+      "mcp__dm-engine__add_item",
+      "mcp__dm-engine__remove_item",
+      "mcp__dm-engine__set_scene",
+      "mcp__dm-engine__travel",
+      "mcp__dm-engine__checkpoint",
+      "mcp__dm-engine__create_character",
+      "mcp__dm-engine__create_npc",
+      "mcp__dm-engine__create_location",
+      "mcp__dm-engine__update_quest",
+      "mcp__dm-engine__award_xp",
+      "mcp__dm-engine__end_session"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "dm-engine"
+  ]
+}

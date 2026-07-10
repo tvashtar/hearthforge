@@ -28,12 +28,12 @@ under `data/srd/` is committed, so this is rarely needed.
 
 ## Frozen contracts — read before touching interfaces
 
-`docs/superpowers/plans/2026-07-08-roadmap.md` defines FC-1..FC-7 (result
-envelope, dice interface, command registry, range bands, storage layout,
-event log, settled gameplay decisions). These are settled user decisions —
-consume them exactly as written, do not redesign them. FC-7 in particular
-lists gameplay rulings (2014 edition, XP progression, death modes, tiered
-spell automation) that must not be reopened.
+`ARCHITECTURE.md` defines FC-1..FC-7 (result envelope, dice interface,
+command registry, range bands, storage layout, event log, settled gameplay
+decisions). These are settled user decisions — consume them exactly as
+written, do not redesign them. FC-7 in particular lists gameplay rulings
+(2014 edition, XP progression, death modes, tiered spell automation) that
+must not be reopened.
 
 ## Architecture
 
@@ -96,8 +96,11 @@ are the source of truth.
   recorded roller, seed 99) and `party` (Kira the PC fighter + Brother
   Aldric, a level-3 companion cleric with slots).
 - Specs go in `docs/superpowers/specs/`, plans in
-  `docs/superpowers/plans/`; the SDD ledger at `.superpowers/sdd/progress.md`
-  records Phase 1 task history.
+  `docs/superpowers/plans/`.
+- When Claude merges a PR, it first checks README.md against the PR's
+  changes and updates it in the same PR if anything is stale — player-
+  facing behavior, setup steps, and the CLI/debug surface must never lag
+  a merge.
 
 ## Live data warning
 

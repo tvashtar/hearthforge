@@ -23,40 +23,31 @@ to over stdio — it never reaches out to an external service. (The only
 other network use is optional: `scripts/sync_srd.py`, if you choose to
 re-fetch the vendored SRD data from GitHub.)
 
-## Requirements
+## Quickstart
 
-- [uv](https://docs.astral.sh/uv/) (Python 3.12+ is fetched automatically)
-- Claude Code
-
-## Setup
+You need [uv](https://docs.astral.sh/uv/) and
+[Claude Code](https://claude.com/claude-code).
 
 ```
-git clone <this repo>
-cd llm-dungeon-master
-uv sync
-uv run dm seed          # builds the SRD rules database
-uv run pytest           # optional: verify everything works
+git clone https://github.com/tvashtar/hearthforge.git
+cd hearthforge
+uv sync && uv run dm seed
+claude
 ```
 
-The SRD 5.1 data is vendored under `data/srd/` and already committed;
-`uv run python scripts/sync_srd.py` re-fetches it from upstream, which you
-only need if you want to refresh it.
+Then just say **"start a campaign"**. Claude interviews you for tone,
+character concept, companions, and death mode, then builds your starting
+world and the adventure begins. Next time, "continue my campaign" picks up
+from the recap.
 
-## Play
+## Playing
 
-Open the repo in Claude Code — `.mcp.json` wires up the `dm-engine` MCP
-server and the committed project settings preapprove the gameplay tools, so
-sessions run without permission prompts. Say something like "start a new
-campaign" and the `dm-session` skill takes it from there: it interviews you
-for tone, character concept, companions, and death mode, then generates and
-persists a starting region and campaign skeleton. Next time, "continue my
-campaign" resumes from the recap.
-
-You roll your own character's dice at the table and report the raw totals;
-the engine rolls everything else and records every die in an audit log.
-Keep your character sheet open in an editor while you play —
-`campaigns/<slug>/sheets/<you>.md` regenerates after every command, so it
-live-updates as the session progresses.
+- You roll your own character's dice and report the raw totals; the engine
+  rolls everything else and records every die in an audit log.
+- Keep your character sheet open in an editor —
+  `campaigns/<slug>/sheets/<you>.md` live-updates as you play.
+- No permission prompts: `.mcp.json` wires up the engine and the committed
+  project settings preapprove the gameplay tools.
 
 ## Playtest feedback
 

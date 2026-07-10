@@ -115,3 +115,93 @@ def test_ruling_rejects_unknown_op(ctx):
         effects=[{"op": "teleport", "target": "Kira"}],
     )
     assert result.ok is False
+
+
+# -- roll_dice ---------------------------------------------------------------
+
+
+def _last_event_rolls(ctx):
+    import json
+    row = ctx.store.conn.execute(
+        "SELECT rolls FROM event_log ORDER BY id DESC LIMIT 1").fetchone()
+    return json.loads(row["rolls"])
+
+
+def test_roll_dice_engine_path_rolls_and_logs(ctx):
+    result = registry.execute("roll_dice", ctx, count=5, sides=8,
+                              reason="sleep HP pool")
+    assert result.ok, result.refusal
+    data = result.data
+    assert data["count"] == 5 and data["sides"] == 8
+    assert len(data["rolls"]) == 5
+    assert all(1 <= r <= 8 for r in data["rolls"])
+    assert data["total"] == sum(data["rolls"])
+    assert data["reason"] == "sleep HP pool"
+    assert data["player_supplied"] is False
+    assert "5d8" in result.digest and "sleep HP pool" in result.digest
+    logged = _last_event_rolls(ctx)
+    assert len(logged) == 1
+    assert logged[0]["rolls"] == data["rolls"]
+    assert logged[0]["player_supplied"] is False
+
+
+def test_roll_dice_is_seed_deterministic(ctx, tmp_path_factory, rules_path):
+    from dm_engine.commands.registry import CommandContext, RecordingRoller
+    from dm_engine.content.lookup import RulesDB
+    from dm_engine.state.store import CampaignStore
+
+    def fresh_roll():
+        store = CampaignStore.create(
+            tmp_path_factory.mktemp("dice") / "c", slug="d", name="D",
+            death_mode="narrative", rng_seed=7, skeleton={"premise": "t"},
+        )
+        c = CommandContext(store=store, roller=RecordingRoller(7),
+                           rules=RulesDB(rules_path))
+        result = registry.execute("roll_dice", c, count=6, sides=20,
+                                  reason="determinism probe")
+        store.close()
+        return result.data["rolls"]
+
+    assert fresh_roll() == fresh_roll()
+
+
+def test_roll_dice_gm_only_stays_behind_the_screen(ctx):
+    result = registry.execute("roll_dice", ctx, count=2, sides=6,
+                              reason="hidden morale roll", gm_only=True)
+    assert result.ok, result.refusal
+    assert result.gm_only is True
+    logged = _last_event_rolls(ctx)
+    assert all(r["gm_only"] for r in logged)
+
+
+def test_roll_dice_player_values_are_flagged_and_echoed(ctx):
+    result = registry.execute("roll_dice", ctx, count=4, sides=6,
+                              reason="rolled stats at the table",
+                              player_values=[6, 1, 4, 3])
+    assert result.ok, result.refusal
+    assert result.data["rolls"] == [6, 1, 4, 3]
+    assert result.data["total"] == 14
+    assert result.data["player_supplied"] is True
+    assert result.digest.startswith("Player rolls")
+    logged = _last_event_rolls(ctx)
+    assert len(logged) == 4  # one 1d6 Roll per supplied die (FC-2 protocol)
+    assert [r["rolls"][0] for r in logged] == [6, 1, 4, 3]
+    assert all(r["player_supplied"] for r in logged)
+
+
+def test_roll_dice_refusals_leave_no_rolls(ctx):
+    cases = [
+        {"count": 5, "sides": 8, "reason": "   "},          # blank reason
+        {"count": 0, "sides": 8, "reason": "r"},            # count too low
+        {"count": 101, "sides": 8, "reason": "r"},          # count too high
+        {"count": 1, "sides": 1, "reason": "r"},            # sides too low
+        {"count": 1, "sides": 1001, "reason": "r"},         # sides too high
+        {"count": 3, "sides": 6, "reason": "r",
+         "player_values": [1, 2]},                          # length mismatch
+        {"count": 2, "sides": 6, "reason": "r",
+         "player_values": [3, 7]},                          # die out of range
+    ]
+    for kwargs in cases:
+        result = registry.execute("roll_dice", ctx, **kwargs)
+        assert result.ok is False, kwargs
+        assert _last_event_rolls(ctx) == []

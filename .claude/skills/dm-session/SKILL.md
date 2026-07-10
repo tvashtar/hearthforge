@@ -43,6 +43,10 @@ and you narrate the results.
   for them.
 - Where the rules imply a DM screen (enemy stealth vs the party, contested
   checks the party shouldn't see), set `gm_only=true` on the command.
+- Arbitrary dice for rulings (improvised pools, tables, stat rolls) go
+  through `roll_dice` — never out-of-engine RNG. Pass `player_values` only
+  when they are the PC's own physical dice; everything else (companions,
+  monsters, world) is engine-rolled.
 
 ## Session procedure
 

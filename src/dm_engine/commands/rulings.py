@@ -230,3 +230,63 @@ def dm_ruling(
         ok=True, command="dm_ruling", digest=description,
         data={"applied": applied}, gm_only=gm_only,
     )
+
+
+@command("roll_dice")
+def roll_dice(
+    ctx: CommandContext,
+    count: int,
+    sides: int,
+    reason: str,
+    gm_only: bool = False,
+    player_values: list[int] | None = None,
+    **kwargs,
+) -> CommandResult:
+    """Roll arbitrary audited dice (count x d(sides)) for a ruling.
+
+    The dice come from the campaign's seeded roller so the event log records
+    every die and replay stays deterministic — the audited alternative to
+    rolling outside the engine. `player_values` reports the PC's physical
+    dice (one value per die, flagged player_supplied); FC-2's etiquette on
+    whose dice may be player-supplied is the dm-session skill's to enforce.
+    """
+    if not isinstance(reason, str) or not reason.strip():
+        return refuse("roll_dice", "roll_dice requires a non-empty reason")
+    if not isinstance(count, int) or not (1 <= count <= 100):
+        return refuse("roll_dice", f"count must be 1-100, got {count!r}")
+    if not isinstance(sides, int) or not (2 <= sides <= 1000):
+        return refuse("roll_dice", f"sides must be 2-1000, got {sides!r}")
+    if player_values is not None:
+        if len(player_values) != count:
+            return refuse(
+                "roll_dice",
+                f"player_values has {len(player_values)} dice, expected {count}",
+            )
+        bad = [v for v in player_values
+               if not isinstance(v, int) or not (1 <= v <= sides)]
+        if bad:
+            return refuse(
+                "roll_dice", f"player value {bad[0]!r} is not a d{sides} result"
+            )
+        # FC-2's DiceRoller takes one player_value per roll: decompose into
+        # `count` single-die rolls so each reported die is a logged Roll.
+        rolls = [
+            ctx.roller.roll(f"1d{sides}", player_value=v, gm_only=gm_only).total
+            for v in player_values
+        ]
+        supplied = True
+        who = "Player"
+    else:
+        rolls = ctx.roller.roll(f"{count}d{sides}", gm_only=gm_only).rolls
+        supplied = False
+        who = "DM"
+
+    total = sum(rolls)
+    digest = f"{who} rolls {count}d{sides} → {rolls} = {total} ({reason.strip()})"
+    data = {
+        "count": count, "sides": sides, "rolls": rolls, "total": total,
+        "reason": reason.strip(), "player_supplied": supplied,
+    }
+    return CommandResult(
+        ok=True, command="roll_dice", digest=digest, data=data, gm_only=gm_only,
+    )

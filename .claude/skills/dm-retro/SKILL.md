@@ -75,7 +75,7 @@ If none fits, it may be an engine bug or a legitimately hard judgment call
 
 ## Deliverable
 
-One Linear ticket per finding (project `llm-dungeon-master`), ordered
+One Linear ticket per finding (project `hearthforge`), ordered
 crash > state integrity > refusal loop > inefficiency, each with: a
 **Session evidence** section quoting event ids / transcript evidence, the
 proposed fix and its class, and priority. Refusals that correctly blocked

@@ -59,13 +59,16 @@ scene:
     the bar; the guild reward notice is nailed by the door.
 beats:
   - id: question-innkeeper
-    goal: Ask Marla the innkeeper what she knows about the missing caravan.
-      Press her for details about the Old Fen Road and Varrik the Red.
-    notes: If the DM asks for a d20 roll, report 17.
+    goal: Ask Marla the innkeeper what she knows about the missing caravan,
+      then tell the DM you want to make an Insight (or Persuasion) check to
+      read what she is holding back about Varrik the Red — say you rolled a
+      17 on your d20 for it.
+    notes: You already rolled your d20 for the check; report 17 as the raw roll.
     max_player_messages: 4
     done_when: {command: skill_check, ok: true}
   - id: buy-supplies
-    goal: Buy a healing potion or basic supplies for the road before leaving.
+    goal: Buy a healing potion before leaving, pay for it, and ask the DM to
+      record it on your character sheet inventory.
     max_player_messages: 3
     done_when: {command: add_item, ok: true}
   - id: travel-to-ambush

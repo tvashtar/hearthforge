@@ -36,3 +36,10 @@ def test_report_has_table_row_per_cell_and_provenance():
 def test_judge_failure_is_flagged_not_hidden():
     md = render_report([_result(judge=False)], judge_model="claude-opus-4-8")
     assert "judge-failed" in md
+
+
+def test_incomplete_run_is_marked_in_beats_column():
+    result = _result()
+    result["error"] = "timeout"
+    md = render_report([result], judge_model="claude-opus-4-8")
+    assert "(INCOMPLETE: timeout)" in md

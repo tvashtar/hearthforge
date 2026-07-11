@@ -37,7 +37,7 @@ class TranscriptWriter:
 
     def write(self, entry: dict) -> None:
         with self.path.open("a") as f:
-            f.write(json.dumps(entry) + "\n")
+            f.write(json.dumps(entry, default=repr) + "\n")
 
 
 def dm_options(
@@ -90,15 +90,17 @@ async def _dm_turn(
                     transcript.write({"type": "dm_text", "text": block.text})
                 elif isinstance(block, ToolUseBlock):
                     transcript.write(
-                        {"type": "tool_call", "name": block.name,
-                         "input": block.input, "is_error": False}
+                        {"type": "tool_call", "id": block.id,
+                         "name": block.name, "input": block.input}
                     )
         elif isinstance(msg, UserMessage):
+            # Every result, success or error, with its full structured content:
+            # the judge grades whether narration is backed by tool results.
             for block in msg.content if isinstance(msg.content, list) else []:
-                if isinstance(block, ToolResultBlock) and block.is_error:
+                if isinstance(block, ToolResultBlock):
                     transcript.write(
-                        {"type": "tool_call", "name": "(result)", "is_error": True,
-                         "content": str(block.content)[:500]}
+                        {"type": "tool_result", "tool_use_id": block.tool_use_id,
+                         "is_error": bool(block.is_error), "content": block.content}
                     )
         elif isinstance(msg, ResultMessage):
             result.turns.append(

@@ -81,6 +81,28 @@ a live session:
 - `dm resume` — open a campaign (snapshotting it) and print the session
   brief.
 
+## Model evals
+
+`uv run dm-eval` benchmarks which Claude model (and thinking effort) makes
+the best DM. Each cell of the matrix plays the same seeded scenario — a few
+narrative beats, then a bandit ambush — as a real DM session (dm-engine MCP
++ the dm-session skill), driven by a fixed Haiku player agent. Runs are
+timed, transcripts archived under `evals/runs/<timestamp>/` (gitignored),
+graded mechanically from the event log, and scored by a blind Opus judge.
+
+- Default matrix: `haiku`, `sonnet`, `opus`, `fable` (latest of each family,
+  never pinned) at `medium` effort, always run weakest-first so limits bite
+  last.
+- `--cells opus:high,sonnet:low` — explicit cells; `--reps N` — repeats with
+  fresh seeds; `--parallel N` / `--serial` — concurrency; `--smoke` — one
+  cheap Haiku cell through two beats to verify wiring; `--judge-only
+  <run-dir>` — re-grade existing bundles.
+- Credentials: uses `ANTHROPIC_API_KEY` (or an `ant auth login` profile) for
+  the player/judge when present, otherwise falls back to headless Claude
+  Code sessions using your existing login.
+- Scratch campaigns are created under `campaigns/eval-*` and deleted after
+  each run's bundle is archived.
+
 ## Attribution
 
 Rules content is derived from the [SRD 5.1](data/srd/ATTRIBUTION.md),

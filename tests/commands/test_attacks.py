@@ -359,6 +359,209 @@ def test_werewolf_immunity_blocks_nonmagical_but_not_magical(ctx):
     assert magical.data["damage"]["applied"] == []
 
 
+# --- no-damage attacks (TVA-22) ------------------------------------------
+
+
+def _rug_turn(ctx):
+    """Start combat vs a rug-of-smothering and give it Kira toe-to-toe."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "rug-of-smothering", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "rug-of-smothering-1", "Kira")
+    _force_turn(ctx, "rug-of-smothering-1", band="engaged", engaged_with=["Kira"])
+
+
+def test_no_damage_attack_resolves_and_surfaces_rider(ctx):
+    """Smother has no damage dice: it must still roll +5 vs AC through the
+    audited roller and, on a hit, surface the grapple rider (TVA-22)."""
+    _rug_turn(ctx)
+    hit = None
+    for _ in range(12):
+        result = registry.execute("attack", ctx, attacker="rug-of-smothering-1",
+                                  target="Kira", attack_name="Smother", spend="none")
+        assert result.ok, result.refusal
+        assert result.data["damage"] is None  # never any direct damage
+        assert result.data["attack_roll"]["total"] == result.data["attack_roll"]["natural"] + 5
+        if result.data["hit"]:
+            hit = result
+            break
+    assert hit is not None, "no hit landed in 12 seeded attempts"
+    rider = hit.data["on_hit"]
+    assert "grappled" in rider["text"]
+    assert rider["escape_dc"] == 13
+    assert {"grappled", "restrained", "blinded"} <= set(rider["conditions"])
+    # no HP was touched — the rider is the DM's to apply
+    kira = ctx.store.get_character("Kira")
+    assert ctx.store.get_resources(kira["id"])["hp"] == 12
+    # the d20 went through ctx.roller and into the event log
+    row = ctx.store.conn.execute(
+        "SELECT rolls FROM event_log ORDER BY id DESC LIMIT 1").fetchone()
+    assert '"1d20"' in row["rolls"]
+
+
+def test_no_damage_attack_listed_as_available(ctx):
+    _rug_turn(ctx)
+    result = registry.execute("attack", ctx, attacker="rug-of-smothering-1",
+                              target="Kira", attack_name="Squash", spend="none")
+    assert result.ok is False
+    assert "available: Smother" in result.refusal
+
+
+def test_no_damage_attack_miss_reports_miss(ctx):
+    _rug_turn(ctx)
+    for _ in range(12):
+        result = registry.execute("attack", ctx, attacker="rug-of-smothering-1",
+                                  target="Kira", attack_name="Smother", spend="none")
+        assert result.ok, result.refusal
+        if not result.data["hit"]:
+            assert result.data.get("on_hit") is None
+            assert result.data["damage"] is None
+            return
+    pytest.skip("seeded rolls never missed")  # pragma: no cover
+
+
+# --- multiattack (TVA-17) -------------------------------------------------
+
+
+def _bear_turn(ctx, *, target_ac=1, target_hp=100):
+    """Brown bear engaged with Kira, bear's turn; Kira's AC/HP forced so
+    swings land deterministically without dropping her."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "brown-bear", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE resources SET hp = ? WHERE character_id = ?",
+                           (target_hp, kira["id"]))
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "Kira":
+            c["ac"] = target_ac
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    _engage_pair(ctx, "brown-bear-1", "Kira")
+    _force_turn(ctx, "brown-bear-1", band="engaged", engaged_with=["Kira"])
+
+
+def test_multiattack_two_swings_one_action(ctx):
+    _bear_turn(ctx)
+    result = registry.execute("attack", ctx, attacker="brown-bear-1", target="Kira",
+                              attack_names=["Bite", "Claws"])
+    assert result.ok, result.refusal
+    swings = result.data["swings"]
+    assert [s["attack_name"] for s in swings] == ["Bite", "Claws"]
+    expected_types = {"Bite": "piercing", "Claws": "slashing"}
+    for s in swings:
+        assert s["attack_roll"]["target_ac"] == 1
+        if s["attack_roll"]["natural"] > 1:  # anything but a nat 1 hits AC 1
+            assert s["hit"] is True
+            assert s["damage"]["type"] == expected_types[s["attack_name"]]
+            assert s["damage"]["final"] >= 1
+    assert result.data["hits"] == sum(1 for s in swings if s["hit"])
+    assert result.data["total_damage"] == sum(
+        s["damage"]["final"] for s in swings if s["damage"])
+    # the whole volley cost ONE action
+    bear = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "brown-bear-1")
+    assert bear["budget"]["action_available"] is False
+    second = registry.execute("attack", ctx, attacker="brown-bear-1", target="Kira",
+                              attack_name="Bite")
+    assert second.ok is False and "action" in second.refusal.lower()
+
+
+def test_multiattack_unknown_name_refused_before_action_spent(ctx):
+    """Validate-before-consume: a bad swing name must refuse with the
+    action still available."""
+    _bear_turn(ctx)
+    result = registry.execute("attack", ctx, attacker="brown-bear-1", target="Kira",
+                              attack_names=["Bite", "Tail Slap"])
+    assert result.ok is False and "Tail Slap" in result.refusal
+    bear = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "brown-bear-1")
+    assert bear["budget"]["action_available"] is True
+
+
+def test_multiattack_param_validation(ctx, combat):
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    both = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                            attack_name="longsword", attack_names=["longsword"])
+    assert both.ok is False
+    neither = registry.execute("attack", ctx, attacker="Kira", target="goblin-1")
+    assert neither.ok is False
+    empty = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                             attack_names=[])
+    assert empty.ok is False
+    reaction = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                                attack_names=["longsword"], spend="reaction")
+    assert reaction.ok is False
+    player_vals = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                                   attack_names=["longsword", "longsword"],
+                                   player_attack_value=15)
+    assert player_vals.ok is False
+    # none of the refusals spent Kira's action
+    kira = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira["budget"]["action_available"] is True
+
+
+def test_multiattack_concentration_check_per_hit(ctx, combat):
+    """Each hit that damages a concentrating target must carry its own
+    concentration trigger (same pattern as magic missile's darts)."""
+    aldric = ctx.store.get_character("Brother Aldric")
+    ctx.store.conn.execute(
+        "UPDATE resources SET concentration = '{\"spell\": \"bless\"}', hp = 100"
+        " WHERE character_id = ?", (aldric["id"],))
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "Brother Aldric":
+            c["ac"] = 1
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    _engage_pair(ctx, "goblin-1", "Brother Aldric")
+    _force_turn(ctx, "goblin-1", band="engaged", engaged_with=["Brother Aldric"])
+    result = registry.execute("attack", ctx, attacker="goblin-1",
+                              target="Brother Aldric",
+                              attack_names=["Scimitar", "Scimitar"])
+    assert result.ok, result.refusal
+    for s in result.data["swings"]:
+        if s["hit"]:
+            assert s["concentration_check"]["dc"] >= 10
+
+
+def test_multiattack_halts_when_target_drops(ctx, combat):
+    """A defeated target ends the volley; unspent swings are not rolled."""
+    result = None
+    for _ in range(10):
+        combatants = ctx.store.combat()["combatants"]
+        for c in combatants:
+            if c["key"] == "goblin-1":
+                c["ac"] = 1
+                c["hp"] = 1
+                c["defeated"] = False
+        ctx.store.update_combat(combatants=combatants)
+        ctx.store.conn.commit()
+        _engage_pair(ctx, "Kira", "goblin-1")
+        _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+        result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                                  attack_names=["longsword", "longsword"])
+        assert result.ok, result.refusal
+        if result.data["swings"][0]["hit"]:
+            break
+    assert result.data["swings"][0]["hit"], "first swing never hit AC 1 in 10 tries"
+    assert result.data["swings"][0]["target"]["status"] == "defeated"
+    assert len(result.data["swings"]) == 1
+    assert "halted" in result.data
+
+
+def test_single_attack_shape_unchanged(ctx, combat):
+    """attack_name single-swing results keep their existing top-level shape."""
+    _engage_pair(ctx, "Kira", "goblin-1")
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="longsword",
+                              player_attack_value=15, player_damage_value=6)
+    assert result.ok, result.refusal
+    for key in ("attack_roll", "hit", "critical", "damage", "target"):
+        assert key in result.data
+    assert "swings" not in result.data
+
+
 # --- condition commands -------------------------------------------------
 
 

@@ -37,6 +37,9 @@ from dm_engine.rules.death import DeathSaveState, apply_damage_while_dying
 _SPENDS = ("action", "reaction", "none")
 _RANGE_RE = re.compile(r"range (\d+)/(\d+) ft")
 _REACH_RE = re.compile(r"reach (\d+) ft")
+_HIT_TEXT_RE = re.compile(r"\bHit:\s*", re.IGNORECASE)
+_ESCAPE_DC_RE = re.compile(r"escape DC (\d+)", re.IGNORECASE)
+_MAX_SWINGS = 10
 
 # TVA-24: unknown-condition refusals echo the vocabulary for single-shot recovery.
 _VALID_CONDITIONS = ", ".join(sorted(CONDITIONS))
@@ -79,6 +82,101 @@ def _monster_weapons_are_magical(record) -> bool:
     special ability ("The <monster>'s weapon attacks are magical.")."""
     abilities = (record.model_extra or {}).get("special_abilities") or []
     return any((sa.get("name") or "").lower() == "magic weapons" for sa in abilities)
+
+
+def _hit_rider(desc: str) -> dict:
+    """Structured on-hit rider for an attack action without damage dice
+    (TVA-22). Cheap extraction only: the post-'Hit:' text verbatim, any SRD
+    condition names it mentions, and a grapple escape DC when present.
+    Recurring damage / transfer traits stay DM-adjudicated (`apply_condition`
+    / `dm_ruling`)."""
+    parts = _HIT_TEXT_RE.split(desc, maxsplit=1)
+    text = (parts[1] if len(parts) > 1 else desc).strip()
+    lowered = text.lower()
+    conditions = sorted(
+        c for c in CONDITIONS if re.search(rf"\b{re.escape(c)}\b", lowered)
+    )
+    rider: dict = {"text": text, "conditions": conditions}
+    match = _ESCAPE_DC_RE.search(text)
+    if match:
+        rider["escape_dc"] = int(match.group(1))
+    return rider
+
+
+def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> dict | str:
+    """Normalize one named attack of a combatant into a spec dict, or return
+    a refusal string.
+
+    Monster actions qualify on `attack_bonus` alone: an action whose Hit is
+    pure rider text (no damage dice, e.g. the rug's Smother) resolves with
+    `damage_notation=None` plus a structured `on_hit` rider (TVA-22).
+    """
+    if atk["kind"] == "character":
+        char = ctx.store.get_character_by_id(atk["character_id"])
+        spec = next((s for s in char["attacks"] if s["name"] == attack_name), None)
+        if spec is None:
+            names = ", ".join(s["name"] for s in char["attacks"]) or "none"
+            return (
+                f"{atk['key']} has no attack named {attack_name!r} (available: {names})"
+            )
+        try:
+            AttackSpec(**spec)
+        except ValidationError:
+            return (
+                f"{atk['key']}'s attack {attack_name!r} has an invalid stored "
+                "spec (pre-validation data?); recreate it or fix via migration"
+            )
+        dmg_mod = attack_damage_mod(spec, char["abilities"])
+        sign = "+" if dmg_mod >= 0 else "-"
+        return {
+            "attack_bonus": attack_to_hit(spec, char["abilities"], char["level"]),
+            "damage_notation": f"{spec['damage']}{sign}{abs(dmg_mod)}",
+            "damage_type": spec["damage_type"],
+            "ranged": spec["ranged"],
+            "range_ft": spec["range_ft"],
+            "long_range_ft": spec.get("long_range_ft"),
+            "magical": "magical" in (spec.get("properties") or []),
+            "on_hit": None,
+            "is_pc": char["role"] == "pc",
+        }
+
+    record = ctx.rules.get_monster(atk["monster_slug"])
+    actions = (record.model_extra or {}).get("actions", [])
+    action = next((a for a in actions if a.get("name") == attack_name), None)
+    if action is None or "attack_bonus" not in action:
+        names = ", ".join(a["name"] for a in actions if "attack_bonus" in a) or "none"
+        return f"{atk['name']} has no attack named {attack_name!r} (available: {names})"
+    dmg = next(
+        (d for d in action.get("damage") or []
+         if "damage_dice" in d and d.get("damage_type")),
+        None,
+    )
+    desc = action.get("desc", "")
+    range_match = _RANGE_RE.search(desc)
+    reach_match = _REACH_RE.search(desc)
+    if range_match:
+        ranged = True
+        range_ft = int(range_match.group(1))
+        long_range_ft: int | None = int(range_match.group(2))
+    elif reach_match:
+        ranged = False
+        range_ft = int(reach_match.group(1))
+        long_range_ft = None
+    else:
+        ranged = False
+        range_ft = 5
+        long_range_ft = None
+    return {
+        "attack_bonus": action["attack_bonus"],
+        "damage_notation": dmg["damage_dice"] if dmg else None,
+        "damage_type": dmg["damage_type"]["index"] if dmg else None,
+        "ranged": ranged,
+        "range_ft": range_ft,
+        "long_range_ft": long_range_ft,
+        "magical": _monster_weapons_are_magical(record),
+        "on_hit": None if dmg else _hit_rider(desc),
+        "is_pc": False,
+    }
 
 
 def _break_concentration(ctx: CommandContext, cid: int) -> bool:
@@ -203,19 +301,146 @@ def apply_damage_to_target(
 # -- attack ---------------------------------------------------------------
 
 
+def _resolve_swing(
+    ctx: CommandContext,
+    atk: dict,
+    tgt: dict,
+    name: str,
+    spec: dict,
+    *,
+    advantage: bool,
+    disadvantage: bool,
+    engaged: bool,
+    player_attack_value: int | None = None,
+    player_damage_value: int | None = None,
+) -> dict:
+    """Resolve one swing — attack roll, then damage or on-hit rider — and
+    apply it. Returns the per-swing data fragment (the single-attack `data`
+    shape). Condition interaction is recomputed per swing so mid-volley
+    changes (a target dropping unconscious) affect later swings."""
+    interaction = attack_interaction(
+        _effects_for_combatant(ctx, atk),
+        _effects_for_combatant(ctx, tgt),
+        engaged=engaged,
+    )
+    mode = combine_advantage(
+        advantage or interaction.mode == "advantage",
+        disadvantage or interaction.mode == "disadvantage"
+        or spec["range_disadvantage"],
+    )
+    roll = resolve_attack_roll(
+        ctx.roller, spec["attack_bonus"], tgt["ac"], mode,
+        player_value=player_attack_value,
+    )
+    critical = roll.critical_hit or (roll.hit and interaction.auto_crit_on_hit)
+
+    data: dict = {
+        "attack_name": name,
+        "attack_roll": {
+            "natural": roll.d20.natural,
+            "total": roll.d20.total,
+            "mode": roll.d20.mode,
+            "target_ac": tgt["ac"],
+        },
+        "hit": roll.hit,
+        "critical": critical,
+        "damage": None,
+        "target": {"key": tgt["key"]},
+    }
+    if not roll.hit:
+        return data
+
+    if spec["damage_notation"] is None:
+        # No damage dice on this attack (TVA-22): the hit lands its rider —
+        # surfaced for the DM to apply via apply_condition / dm_ruling.
+        data["on_hit"] = spec["on_hit"]
+        return data
+
+    damage = roll_damage(
+        ctx.roller, spec["damage_notation"], critical=critical,
+        player_value=player_damage_value,
+    )
+    raw = damage.total
+    damage_type = spec["damage_type"]
+    if tgt["kind"] == "monster":
+        record = ctx.rules.get_monster(tgt["monster_slug"])
+        resistances, vulnerabilities, immunities = _monster_defense_sets(
+            record, damage_type, is_magical=spec["magical"]
+        )
+    else:
+        res = ctx.store.get_resources(tgt["character_id"])
+        petrified = effects_for(res["conditions"], res.get("exhaustion", 0)).resist_all_damage
+        resistances = {damage_type} if petrified else set()
+        vulnerabilities = set()
+        immunities = set()
+    mitigated = apply_mitigation(
+        raw, damage_type,
+        resistances=resistances, vulnerabilities=vulnerabilities, immunities=immunities,
+    )
+    final = mitigated.final
+
+    fragment = apply_damage_to_target(ctx, tgt["key"], final, damage_type, critical=critical)
+    data["damage"] = {
+        "raw": raw, "final": final, "type": damage_type, "applied": mitigated.applied,
+    }
+    data["target"] = fragment["target"]
+    if "concentration_check" in fragment:
+        data["concentration_check"] = fragment["concentration_check"]
+    if fragment.get("concentration_broken"):
+        data["concentration_broken"] = True
+    if fragment.get("defeated"):
+        data["defeated"] = True
+    return data
+
+
+def _drop_tail(target: str, swing: dict) -> str:
+    """Digest suffix for a swing that dropped its target, or ''."""
+    status = swing["target"].get("status")
+    if swing.get("defeated"):
+        return " — it drops!"
+    if status in ("dead", "defeated"):
+        return f" — {target} is {status}!"
+    if status == "unconscious":
+        return f" — {target} drops unconscious!"
+    return ""
+
+
+def _swing_digest(attacker: str, target: str, swing: dict) -> str:
+    ar = swing["attack_roll"]
+    if not swing["hit"]:
+        outcome = "critically misses" if ar["natural"] == 1 else "misses"
+        return f"{attacker} {outcome} {target} ({ar['total']} vs AC {ar['target_ac']})"
+    verb = "crits" if swing["critical"] else "hits"
+    if swing["damage"] is None:
+        rider = swing.get("on_hit") or {}
+        effect = (rider.get("text") or "no damage").split(". ")[0]
+        return (
+            f"{attacker} {verb} {target} with {swing['attack_name']} "
+            f"({ar['total']} vs AC {ar['target_ac']}) — {effect}"
+        )
+    dmg = swing["damage"]
+    return (
+        f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']} "
+        f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}"
+    )
+
+
 @command("attack")
 def attack(
     ctx: CommandContext,
     attacker: str,
     target: str,
-    attack_name: str,
+    attack_name: str | None = None,
     spend: str = "action",
     player_attack_value: int | None = None,
     player_damage_value: int | None = None,
     advantage: bool = False,
     disadvantage: bool = False,
+    attack_names: list[str] | None = None,
     **kwargs,
 ) -> CommandResult:
+    """Resolve one attack, or a full multiattack volley via `attack_names`
+    (one action, per-swing results in `data.swings`)."""
     combat = ctx.store.combat()
     if not combat["active"]:
         return refuse("attack", "no combat is active")
@@ -231,7 +456,35 @@ def attack(
     if tgt["defeated"]:
         return refuse("attack", f"{target} is already defeated")
 
-    # Step 2: action economy.
+    # Step 2: which swings (TVA-17: attack_names = a multiattack volley).
+    multi = attack_names is not None
+    if multi:
+        if attack_name is not None:
+            return refuse("attack", "give either attack_name or attack_names, not both")
+        if not attack_names:
+            return refuse("attack", "attack_names must be a non-empty list")
+        if len(attack_names) > _MAX_SWINGS:
+            return refuse(
+                "attack", f"too many swings ({len(attack_names)}; max {_MAX_SWINGS})"
+            )
+        if spend == "reaction":
+            return refuse(
+                "attack",
+                "a reaction is a single attack; multiattack needs spend='action' or 'none'",
+            )
+        if player_attack_value is not None or player_damage_value is not None:
+            return refuse(
+                "attack",
+                "player values apply to a single attack; multiattack swings are "
+                "engine-rolled (or make separate attack calls)",
+            )
+        names = list(attack_names)
+    elif attack_name is None:
+        return refuse("attack", "attack_name (or attack_names) is required")
+    else:
+        names = [attack_name]
+
+    # Step 3: action economy (validated here, committed after all checks).
     if spend not in _SPENDS:
         return refuse("attack", f"invalid spend {spend!r} (expected action/reaction/none)")
     idx = combat["turn_index"]
@@ -255,69 +508,18 @@ def attack(
         else:
             use_reaction_flag = True
 
-    # Step 3: attack spec resolution.
-    if atk["kind"] == "character":
-        char = ctx.store.get_character_by_id(atk["character_id"])
-        spec = next((s for s in char["attacks"] if s["name"] == attack_name), None)
-        if spec is None:
-            names = ", ".join(s["name"] for s in char["attacks"]) or "none"
-            return refuse(
-                "attack",
-                f"{attacker} has no attack named {attack_name!r} (available: {names})",
-            )
-        try:
-            AttackSpec(**spec)
-        except ValidationError:
-            return refuse(
-                "attack",
-                f"{attacker}'s attack {attack_name!r} has an invalid stored "
-                "spec (pre-validation data?); recreate it or fix via migration",
-            )
-        attack_bonus = attack_to_hit(spec, char["abilities"], char["level"])
-        dmg_mod = attack_damage_mod(spec, char["abilities"])
-        sign = "+" if dmg_mod >= 0 else "-"
-        damage_notation = f"{spec['damage']}{sign}{abs(dmg_mod)}"
-        damage_type = spec["damage_type"]
-        spec_ranged = spec["ranged"]
-        range_ft = spec["range_ft"]
-        long_range_ft = spec.get("long_range_ft")
-        attack_is_magical = "magical" in (spec.get("properties") or [])
-        is_pc = char["role"] == "pc"
-    else:
-        record = ctx.rules.get_monster(atk["monster_slug"])
-        actions = (record.model_extra or {}).get("actions", [])
-        action = next((a for a in actions if a.get("name") == attack_name), None)
-        if action is None or "attack_bonus" not in action or not action.get("damage"):
-            names = ", ".join(
-                a["name"] for a in actions if "attack_bonus" in a and a.get("damage")
-            ) or "none"
-            return refuse(
-                "attack",
-                f"{atk['name']} has no attack named {attack_name!r} (available: {names})",
-            )
-        attack_bonus = action["attack_bonus"]
-        dmg = action["damage"][0]
-        damage_notation = dmg["damage_dice"]
-        damage_type = dmg["damage_type"]["index"]
-        desc = action.get("desc", "")
-        range_match = _RANGE_RE.search(desc)
-        reach_match = _REACH_RE.search(desc)
-        if range_match:
-            spec_ranged = True
-            range_ft = int(range_match.group(1))
-            long_range_ft = int(range_match.group(2))
-        elif reach_match:
-            spec_ranged = False
-            range_ft = int(reach_match.group(1))
-            long_range_ft = None
-        else:
-            spec_ranged = False
-            range_ft = 5
-            long_range_ft = None
-        attack_is_magical = _monster_weapons_are_magical(record)
-        is_pc = False
+    # Step 4: attack spec resolution — every named swing, before any spend.
+    specs: dict[str, dict] = {}
+    for name in names:
+        if name in specs:
+            continue
+        spec = _resolve_attack_spec(ctx, atk, name)
+        if isinstance(spec, str):
+            return refuse("attack", spec)
+        specs[name] = spec
+    is_pc = next(iter(specs.values()))["is_pc"]
 
-    # Step 4: player-supplied values (PC attackers only).
+    # Step 5: player-supplied values (PC attackers only).
     if (player_attack_value is not None or player_damage_value is not None) and not is_pc:
         return refuse(
             "attack", f"{attacker} is engine-rolled; player values are for PCs only"
@@ -331,30 +533,20 @@ def attack(
             "attack", f"player_damage_value must be >= 0 (got {player_damage_value})"
         )
 
-    # Step 5: range legality.
+    # Step 6: range legality, per named swing.
     engaged = target in atk["engaged_with"]
     dist = distance_band(atk["band"], tgt["band"], mutually_engaged=engaged)
-    legality = weapon_range_legality(
-        dist, range_ft, long_range_ft,
-        ranged=spec_ranged, attacker_engaged=bool(atk["engaged_with"]),
-    )
-    if legality == "out_of_range":
-        return refuse(
-            "attack", f"{attack_name} ({range_ft} ft) cannot reach a target at {dist}"
+    for name, spec in specs.items():
+        legality = weapon_range_legality(
+            dist, spec["range_ft"], spec["long_range_ft"],
+            ranged=spec["ranged"], attacker_engaged=bool(atk["engaged_with"]),
         )
-    range_disadvantage = legality == "disadvantage"
-
-    # Step 6: advantage math.
-    interaction = attack_interaction(
-        _effects_for_combatant(ctx, atk),
-        _effects_for_combatant(ctx, tgt),
-        engaged=engaged,
-    )
-    any_advantage = advantage or interaction.mode == "advantage"
-    any_disadvantage = (
-        disadvantage or interaction.mode == "disadvantage" or range_disadvantage
-    )
-    mode = combine_advantage(any_advantage, any_disadvantage)
+        if legality == "out_of_range":
+            return refuse(
+                "attack",
+                f"{name} ({spec['range_ft']} ft) cannot reach a target at {dist}",
+            )
+        spec["range_disadvantage"] = legality == "disadvantage"
 
     # Commit the economy spend now that the attack is going ahead.
     if committed_budget is not None:
@@ -364,80 +556,44 @@ def attack(
     if committed_budget is not None or use_reaction_flag:
         ctx.store.update_combat(combatants=combatants)
 
-    # Step 7: resolve the attack roll and (on hit) damage.
-    roll = resolve_attack_roll(
-        ctx.roller, attack_bonus, tgt["ac"], mode, player_value=player_attack_value
-    )
-    critical = roll.critical_hit or (roll.hit and interaction.auto_crit_on_hit)
-
-    data: dict = {
-        "attack_roll": {
-            "natural": roll.d20.natural,
-            "total": roll.d20.total,
-            "mode": roll.d20.mode,
-            "target_ac": tgt["ac"],
-        },
-        "hit": roll.hit,
-        "critical": critical,
-        "damage": None,
-        "target": {"key": target},
-    }
-    if spend == "reaction" and not is_turn:
-        data["opportunity"] = True
-
-    if not roll.hit:
-        outcome = "misses" if not roll.critical_miss else "critically misses"
-        digest = (
-            f"{attacker} {outcome} {target} "
-            f"({roll.d20.total} vs AC {tgt['ac']})"
+    # Steps 7-8: resolve each swing (advantage math recomputed per swing).
+    swings: list[dict] = []
+    halted: str | None = None
+    for i, name in enumerate(names):
+        swing = _resolve_swing(
+            ctx, atk, tgt, name, specs[name],
+            advantage=advantage, disadvantage=disadvantage, engaged=engaged,
+            player_attack_value=player_attack_value,
+            player_damage_value=player_damage_value,
         )
+        swings.append(swing)
+        status = swing["target"].get("status")
+        if (swing.get("defeated") or status in ("dead", "defeated")) and i + 1 < len(names):
+            halted = f"{target} is down after swing {i + 1}; remaining swings not taken"
+            break
+
+    # Step 9: envelope + digest.
+    if not multi:
+        data = dict(swings[0])
+        if spend == "reaction" and not is_turn:
+            data["opportunity"] = True
+        digest = _swing_digest(attacker, target, swings[0])
         return CommandResult(ok=True, command="attack", digest=digest, data=data)
 
-    # Step 8: damage.
-    damage = roll_damage(
-        ctx.roller, damage_notation, critical=critical, player_value=player_damage_value
-    )
-    raw = damage.total
-    if tgt["kind"] == "monster":
-        record = ctx.rules.get_monster(tgt["monster_slug"])
-        resistances, vulnerabilities, immunities = _monster_defense_sets(
-            record, damage_type, is_magical=attack_is_magical
-        )
-    else:
-        res = ctx.store.get_resources(tgt["character_id"])
-        petrified = effects_for(res["conditions"], res.get("exhaustion", 0)).resist_all_damage
-        resistances = {damage_type} if petrified else set()
-        vulnerabilities = set()
-        immunities = set()
-    mitigated = apply_mitigation(
-        raw, damage_type,
-        resistances=resistances, vulnerabilities=vulnerabilities, immunities=immunities,
-    )
-    final = mitigated.final
-
-    fragment = apply_damage_to_target(ctx, target, final, damage_type, critical=critical)
-    data["damage"] = {
-        "raw": raw, "final": final, "type": damage_type, "applied": mitigated.applied,
+    hits = sum(1 for s in swings if s["hit"])
+    total = sum(s["damage"]["final"] for s in swings if s["damage"])
+    data = {
+        "swings": swings,
+        "attacks": len(names),
+        "hits": hits,
+        "total_damage": total,
+        "target": swings[-1]["target"],
     }
-    data["target"] = fragment["target"]
-    if "concentration_check" in fragment:
-        data["concentration_check"] = fragment["concentration_check"]
-    if fragment.get("concentration_broken"):
-        data["concentration_broken"] = True
-
-    # Step 9: digest.
-    verb = "crits" if critical else "hits"
-    status = fragment["target"].get("status")
-    tail = ""
-    if fragment.get("defeated"):
-        tail = " — it drops!"
-    elif status in ("dead", "defeated"):
-        tail = f" — {target} is {status}!"
-    elif status == "unconscious":
-        tail = f" — {target} drops unconscious!"
+    if halted:
+        data["halted"] = halted
     digest = (
-        f"{attacker} {verb} {target} for {final} {damage_type} "
-        f"({roll.d20.total} vs AC {tgt['ac']}){tail}"
+        f"{attacker} makes {len(names)} attacks on {target}: "
+        f"{hits} hit for {total} damage{_drop_tail(target, swings[-1])}"
     )
     return CommandResult(ok=True, command="attack", digest=digest, data=data)
 

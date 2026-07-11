@@ -126,18 +126,28 @@ companions IN FICTION — they are recruited through play, not spawned.
    includes the advisory difficulty — report it to yourself; you may
    deliberately deviate from a fair fight, but say why in the narration
    (the deviation is logged).
-2. Drive turns from what results already told you: `next_turn` names the
-   actor and its budget, and every attack/move result reports the HP and
-   positions it changed. A monster or companion turn is ONE beat: its
+2. Drive turns from what results already told you: `next_turn` returns the
+   full combat snapshot — the actor, its budget, and the whole order with
+   live HP, conditions, bands, and engagements — and every attack/move
+   result reports the HP and positions it changed, so you never need a
+   per-turn poll. A monster or companion turn is ONE beat: its
    commands back-to-back (`move`/`engage`/`attack`/…), then one or two
    sentences of narration built from the digests, and only THEN
    `next_turn` for the next actor. Narrate play-by-play, not in arrears:
    the player watches the fight unfold actor by actor, so never chain a
    second actor's commands before the previous actor's narration has been
    emitted — a silent multi-turn tool-call run that ends in one big
-   narration dump is a pacing bug. `get_scene_state` is for re-orienting —
-   combat start, after an error, positions genuinely unclear — not a
-   per-turn step.
+   narration dump is a pacing bug. `get_scene_state` is for out-of-combat
+   scenes and re-orienting after an error or when resuming a session
+   mid-combat — never a per-turn step.
+   - Multiattack: pass the stat block's swings in one call via
+     `attack_names` (e.g. `["Bite", "Claws"]`, engine-rolled) — one action,
+     per-swing results in `data.swings`. Repeat a name for identical swings.
+   - Attacks with no damage dice (e.g. a rug's Smother) resolve to
+     hit/miss and return `data.on_hit` — the rider text plus any parsed
+     conditions and escape DC. Apply the conditions with `apply_condition`
+     and adjudicate recurring/ongoing effects yourself (`dm_ruling` for
+     dice or damage).
 3. Range bands: engaged/near/far/distant. Leaving `engaged` without
    Disengage provokes — the result lists provokers; resolve each as a
    reaction `attack` (spend="reaction").

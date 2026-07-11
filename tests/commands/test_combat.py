@@ -190,6 +190,72 @@ def test_next_turn_resets_reactions_each_round(ctx):
     assert all(c["reaction_used"] is False for c in after["combatants"])
 
 
+# --- next_turn combat snapshot (TVA-18) --------------------------------------
+
+def test_next_turn_includes_combat_snapshot(ctx):
+    """next_turn must carry the same compact snapshot get_scene_state builds
+    (order with live HP/conditions/bands, budgets) so no per-turn poll is
+    needed."""
+    _start(ctx)
+    result = registry.execute("next_turn", ctx)
+    assert result.ok
+    data = result.data
+    keys = {c["key"] for c in data["order"]}
+    assert keys == {"Kira", "Brother Aldric", "goblin-1", "goblin-2"}
+    assert data["active"] == data["order"][data["turn_index"]]["key"]
+    kira = next(c for c in data["order"] if c["key"] == "Kira")
+    assert kira["hp"] == 12  # merged live from resources
+    assert kira["conditions"] == [] and kira["band"] == "near"
+    assert "engaged_with" in kira
+    goblin = next(c for c in data["order"] if c["key"] == "goblin-1")
+    assert goblin["hp"] == 7
+    assert set(data["budgets"]) == keys
+    assert data["budgets"][data["active"]] == data["budget"]
+
+
+# --- move refusal quality (TVA-27) -------------------------------------------
+
+def test_move_refusal_reports_cost_and_no_reachable_band(ctx):
+    """A speed-10 monster dashing for distant must learn the transition price
+    and that no band change is reachable — not just its remaining budget."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "rug-of-smothering", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    combat = ctx.store.combat()
+    idx = next(i for i, c in enumerate(combat["combatants"])
+               if c["key"] == "rug-of-smothering-1")
+    for c in combat["combatants"]:
+        if c["key"] == "rug-of-smothering-1":
+            c["budget"] = {"speed": 10, "movement_remaining": 10,
+                           "action_available": True, "bonus_action_available": True,
+                           "reaction_available": True}
+    ctx.store.update_combat(combatants=combat["combatants"], turn_index=idx)
+    ctx.store.conn.commit()
+    result = registry.execute("move", ctx, combatant="rug-of-smothering-1",
+                              to_band="distant", dash=True)
+    assert result.ok is False
+    assert "costs 90 ft" in result.refusal
+    assert "20 ft" in result.refusal  # 10 speed + 10 dash
+    assert "no band change reachable" in result.refusal
+    # the refused dash did not consume the action: an identical retry sees
+    # the same 20 ft budget
+    retry = registry.execute("move", ctx, combatant="rug-of-smothering-1",
+                             to_band="far", dash=True)
+    assert retry.ok is False
+    assert "costs 30 ft" in retry.refusal and "20 ft" in retry.refusal
+
+
+def test_move_refusal_lists_reachable_bands(ctx):
+    _start(ctx)
+    active = ctx.store.combat()["combatants"][0]["key"]
+    # everyone here has speed 30; near -> distant costs 90 ft
+    result = registry.execute("move", ctx, combatant=active, to_band="distant")
+    assert result.ok is False
+    assert "costs 90 ft" in result.refusal
+    assert "30 ft" in result.refusal
+    assert "reachable this turn: engaged, far" in result.refusal
+
+
 # --- surprise --------------------------------------------------------------
 
 def _assert_no_round_one_budget(ctx, key):

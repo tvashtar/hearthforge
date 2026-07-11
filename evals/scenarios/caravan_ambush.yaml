@@ -1,0 +1,111 @@
+name: The Missing Caravan
+premise: >
+  A trade caravan bound for Dunmere vanished on the Old Fen Road three days
+  ago. The merchants' guild in the village of Bracken Hollow is offering 50
+  gold for answers. Bandits led by a brute called Varrik the Red are
+  suspected.
+player_persona: >
+  You are playing Kira, a pragmatic human fighter, blunt and brave, traveling
+  with Brother Aldric, a dwarf cleric companion. You speak in first person,
+  in-character, 1-3 sentences per message. You roll your own physical dice
+  when the DM asks: report the raw number the notes for the current goal give
+  you; if the notes give no number, say "/roll" to let the DM roll for you.
+  Never narrate outcomes yourself; state intent and let the DM resolve it.
+pc_name: Kira
+party:
+  - name: Kira
+    role: pc
+    class_slug: fighter
+    race_slug: human
+    abilities: {str: 16, dex: 14, con: 14, int: 10, wis: 12, cha: 8}
+    ac: 16
+    proficiencies: {skills: [athletics, intimidation]}
+    attacks: [{weapon: longsword, name: longsword}]
+  - name: Brother Aldric
+    role: companion
+    class_slug: cleric
+    race_slug: hill-dwarf
+    level: 3
+    abilities: {str: 14, dex: 8, con: 15, int: 10, wis: 15, cha: 12}
+    ac: 18
+    proficiencies: {skills: [medicine, religion]}
+    attacks: [{weapon: mace, name: mace}]
+starting_region:
+  locations:
+    - slug: bracken-hollow
+      name: Bracken Hollow
+      description: A fenland trade village of stilt-houses and peat smoke.
+      region: The Fenmarch
+    - slug: old-fen-road
+      name: The Old Fen Road
+      description: A raised causeway through the marsh, wide enough for carts.
+      region: The Fenmarch
+  npcs:
+    - name: Marla Underbough
+      disposition: friendly
+      location_slug: bracken-hollow
+      notes: {role: innkeeper of the Heron's Rest, knows caravan gossip}
+    - name: Guildmaster Fenn
+      disposition: neutral
+      location_slug: bracken-hollow
+      notes: {role: merchants' guild master, posted the 50gp reward}
+quest:
+  name: The Missing Caravan
+  description: Find out what happened to the Dunmere caravan on the Old Fen Road.
+scene:
+  location_slug: bracken-hollow
+  description: >
+    Evening in the common room of the Heron's Rest. Marla Underbough tends
+    the bar; the guild reward notice is nailed by the door.
+beats:
+  - id: question-innkeeper
+    goal: Ask Marla the innkeeper what she knows about the missing caravan,
+      then tell the DM you want to make an Insight (or Persuasion) check to
+      read what she is holding back about Varrik the Red — say you rolled a
+      17 on your d20 for it.
+    notes: You already rolled your d20 for the check; report 17 as the raw roll.
+    max_player_messages: 4
+    done_when: {command: skill_check, ok: true}
+  - id: buy-supplies
+    goal: Buy a healing potion before leaving, pay for it, and ask the DM to
+      record it on your character sheet inventory.
+    max_player_messages: 3
+    done_when: {command: add_item, ok: true}
+  - id: travel-to-ambush
+    goal: Set out along the Old Fen Road toward where the caravan vanished.
+    max_player_messages: 3
+    done_when: {command: travel, ok: true}
+  - id: investigate-wreckage
+    goal: Search the wrecked caravan carefully for clues about the attackers
+      and any survivors.
+    notes: If the DM asks for a d20 roll, report 14.
+    max_player_messages: 4
+    done_when: {command: skill_check, ok: true}
+  - id: fight-bandits
+    goal: Bandits attack! Fight them. Engage the nearest bandit in melee with
+      your longsword.
+    notes: If asked for initiative report 12. If asked for an attack roll
+      report 18, damage 7. On later attacks say "/roll".
+    max_player_messages: 8
+    done_when: {command: attack, ok: true}
+  - id: tier1-heal
+    goal: Brother Aldric is hurt. Ask him to cast Healing Word on himself
+      (or on you if you are hurt instead).
+    max_player_messages: 4
+    done_when: {command: cast_spell, ok: true}
+  - id: tier2-spell
+    goal: Ask Brother Aldric to cast Bless on the party to turn the tide.
+    max_player_messages: 4
+    done_when: {command: cast_spell, ok: true}
+  - id: illegal-action
+    goal: A bandit archer is far away across the marsh. Try to hit him with
+      your longsword from where you stand, without moving.
+    max_player_messages: 3
+    done_when: {command: attack, ok: false}
+  - id: wrap-up
+    goal: Finish the fight, loot the bodies, and then tell the DM you want to
+      end the session here.
+    notes: Say "/roll" for any remaining dice. After looting, say clearly
+      "let's end the session here".
+    max_player_messages: 10
+    done_when: {command: end_session, ok: true}

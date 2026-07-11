@@ -63,6 +63,9 @@ def build_campaign(
     )
     try:
         for member in scenario.party:
+            # create_character ignores a `level` kwarg and always inserts at
+            # level 1 — the companion's YAML `level: 3` is aspirational until
+            # the engine grows a level parameter (TVA-30 follow-up).
             registry.execute("create_character", ctx, **member)
         # update_quest takes slug/title/status/notes, not the scenario's
         # name/description keys — map them rather than changing the handler.

@@ -15,6 +15,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# IF NOT EXISTS so it can double as the in-place migration for campaigns
+# created before TVA-20: every CampaignStore constructor runs it.
+ACTIVE_EFFECTS_TABLE = """
+CREATE TABLE IF NOT EXISTS active_effects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id INTEGER NOT NULL REFERENCES characters(id),
+    name TEXT NOT NULL,
+    source_event_id INTEGER,
+    mechanics TEXT NOT NULL DEFAULT '{}',
+    expires_day INTEGER,
+    expires_minutes INTEGER,
+    expires_on_rest TEXT CHECK (expires_on_rest IN ('short','long')),
+    concentration INTEGER NOT NULL DEFAULT 0,
+    caster_id INTEGER REFERENCES characters(id)
+);
+"""
+
 SCHEMA = """
 CREATE TABLE campaign (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -120,7 +137,7 @@ CREATE TABLE event_log (
     is_ruling INTEGER NOT NULL DEFAULT 0,
     rationale TEXT
 );
-"""
+""" + ACTIVE_EFFECTS_TABLE
 
 _JSON_CHARACTER_FIELDS = {"abilities", "proficiencies", "attacks", "spells_known"}
 _JSON_RESOURCE_FIELDS = {"spell_slots", "conditions", "death_saves", "concentration"}
@@ -132,6 +149,10 @@ class CampaignStore:
         self.root = root  # campaigns/<slug>/
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
+        # In-place migration for campaigns created before TVA-20 (no-op
+        # otherwise); executescript commits, so it runs before any command
+        # transaction is open.
+        conn.executescript(ACTIVE_EFFECTS_TABLE)
 
     # -- lifecycle -----------------------------------------------------
 
@@ -238,6 +259,15 @@ class CampaignStore:
     def event_count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM event_log").fetchone()[0]
 
+    def next_event_id(self) -> int:
+        """The id the next `append_event` will be assigned. Exact because the
+        log is append-only AUTOINCREMENT (never deleted, ids never reused);
+        handlers use it to stamp rows with their own not-yet-written event."""
+        row = self.conn.execute(
+            "SELECT seq FROM sqlite_sequence WHERE name = 'event_log'"
+        ).fetchone()
+        return (int(row[0]) if row else 0) + 1
+
     def rulings(self) -> list[dict]:
         rows = self.conn.execute(
             "SELECT id, created_at, command, rationale, result FROM event_log"
@@ -333,6 +363,53 @@ class CampaignStore:
             f"UPDATE resources SET {cols} WHERE character_id = ?",
             (*payload.values(), cid),
         )
+
+    # -- active effects ----------------------------------------------------
+
+    def add_effect(
+        self,
+        character_id: int,
+        *,
+        name: str,
+        mechanics: dict,
+        source_event_id: int | None = None,
+        expires_day: int | None = None,
+        expires_minutes: int | None = None,
+        expires_on_rest: str | None = None,
+        concentration: bool = False,
+        caster_id: int | None = None,
+    ) -> int:
+        cur = self.conn.execute(
+            "INSERT INTO active_effects (character_id, name, source_event_id,"
+            " mechanics, expires_day, expires_minutes, expires_on_rest,"
+            " concentration, caster_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (character_id, name, source_event_id, json.dumps(mechanics),
+             expires_day, expires_minutes, expires_on_rest,
+             int(concentration), caster_id),
+        )
+        return int(cur.lastrowid)
+
+    def _parse_effect(self, row: sqlite3.Row) -> dict:
+        effect = dict(row)
+        effect["mechanics"] = json.loads(effect["mechanics"])
+        effect["concentration"] = bool(effect["concentration"])
+        return effect
+
+    def active_effects_for(self, character_id: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM active_effects WHERE character_id = ? ORDER BY id",
+            (character_id,),
+        ).fetchall()
+        return [self._parse_effect(r) for r in rows]
+
+    def all_active_effects(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT * FROM active_effects ORDER BY id"
+        ).fetchall()
+        return [self._parse_effect(r) for r in rows]
+
+    def delete_effect(self, effect_id: int) -> None:
+        self.conn.execute("DELETE FROM active_effects WHERE id = ?", (effect_id,))
 
     # -- inventory --------------------------------------------------------
 

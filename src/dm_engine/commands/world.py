@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dm_engine.commands.effects import expire_clock_effects
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 
@@ -40,10 +41,11 @@ def travel(
     ctx.store.update_world_clock(
         day=new_day, minutes=minutes, location_slug=destination_slug, scene=None
     )
+    expired = expire_clock_effects(ctx)
     new_clock = ctx.store.world_clock()
     return CommandResult(
         ok=True, command="travel", digest=f"Traveled to {destination_slug}",
-        data={"clock": new_clock},
+        data={"clock": new_clock, "effects_expired": [e["name"] for e in expired]},
     )
 
 

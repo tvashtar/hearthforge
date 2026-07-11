@@ -9,6 +9,11 @@ sink cure-wounds uses.
 
 from __future__ import annotations
 
+from dm_engine.commands.effects import (
+    clear_concentration_effects,
+    expire_clock_effects,
+    expire_rest_effects,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.commands.spells import _apply_healing
@@ -85,20 +90,25 @@ def _short_rest(
             "hit_dice_remaining": outcome.pool.remaining,
         })
 
+    expired = expire_rest_effects(ctx, "short")
+
     total = sum(c["healed"] for c in per_character)
     digest = f"Short rest — the party recovers {total} HP"
     return CommandResult(
         ok=True, command="rest", digest=digest,
-        data={"kind": "short", "per_character": per_character},
+        data={"kind": "short", "per_character": per_character,
+              "effects_expired": [e["name"] for e in expired]},
     )
 
 
 def _long_rest(ctx: CommandContext) -> CommandResult:
     per_character: list[dict] = []
+    rested_ids: list[int] = []
     for char in ctx.store.party():
         if char["status"] != "active":
             continue
         cid = char["id"]
+        rested_ids.append(cid)
         res = ctx.store.get_resources(cid)
         hit_die = ctx.rules.get_class(char["class_slug"])["hit_die"]
         pool = HitDicePool(
@@ -125,15 +135,24 @@ def _long_rest(ctx: CommandContext) -> CommandResult:
             "exhaustion": outcome.exhaustion_level,
         })
 
+    # Effects end with the rest: rest-scoped ones, everything the sleepers
+    # were concentrating on (concentration was cleared above), and anything
+    # whose clock runs out during the 8 hours.
+    expired = expire_rest_effects(ctx, "long")
+    for cid in rested_ids:
+        expired += clear_concentration_effects(ctx, cid)
+
     clock = ctx.store.world_clock()
     day_overflow, minutes = divmod(clock["minutes"] + _LONG_REST_MINUTES, 1440)
     new_day = clock["day"] + day_overflow
     ctx.store.update_world_clock(day=new_day, minutes=minutes)
+    expired += expire_clock_effects(ctx)
 
     digest = f"Long rest — the party wakes on day {new_day} fully restored"
     return CommandResult(
         ok=True, command="rest", digest=digest,
-        data={"kind": "long", "per_character": per_character, "day": new_day},
+        data={"kind": "long", "per_character": per_character, "day": new_day,
+              "effects_expired": [e["name"] for e in expired]},
     )
 
 

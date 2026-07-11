@@ -432,11 +432,10 @@ def _bear_turn(ctx, *, target_ac=1, target_hp=100):
     kira = ctx.store.get_character("Kira")
     ctx.store.conn.execute("UPDATE resources SET hp = ? WHERE character_id = ?",
                            (target_hp, kira["id"]))
-    combatants = ctx.store.combat()["combatants"]
-    for c in combatants:
-        if c["key"] == "Kira":
-            c["ac"] = target_ac
-    ctx.store.update_combat(combatants=combatants)
+    # Character targets resolve AC from the store (base + active effects),
+    # not the combatant entry, so force it there.
+    ctx.store.conn.execute("UPDATE characters SET ac = ? WHERE id = ?",
+                           (target_ac, kira["id"]))
     ctx.store.conn.commit()
     _engage_pair(ctx, "brown-bear-1", "Kira")
     _force_turn(ctx, "brown-bear-1", band="engaged", engaged_with=["Kira"])

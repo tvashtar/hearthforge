@@ -16,6 +16,11 @@ from pydantic import ValidationError
 
 from dm_engine.content.lookup import RulesDB
 from dm_engine.models.character import SKILL_ABILITIES, AttackSpec
+from dm_engine.rules.active_effects import (
+    clock_expired,
+    effective_ac,
+    remaining_minutes,
+)
 from dm_engine.rules.character_build import (
     attack_damage_mod,
     attack_to_hit,
@@ -69,6 +74,41 @@ def _spell_line(rules: RulesDB, slug: str) -> str:
     return f"{record.name} — {', '.join(parts)}"
 
 
+def _fmt_duration(total_minutes: int) -> str:
+    hours, minutes = divmod(max(0, total_minutes), 60)
+    if hours and minutes:
+        return f"{hours}h {minutes}m"
+    if hours:
+        return f"{hours}h"
+    return f"{minutes}m"
+
+
+def _describe_effect(effect: dict, clock: dict) -> str:
+    """One sheet line for an active effect: its mechanics, then how it ends."""
+    mech = effect["mechanics"]
+    parts: list[str] = []
+    if "ac_override" in mech:
+        parts.append(f"AC {mech['ac_override']}")
+    if "ac_bonus" in mech:
+        parts.append(f"{_fmt_mod(mech['ac_bonus'])} AC")
+    if "note" in mech:
+        parts.append(mech["note"])
+    tail: list[str] = []
+    remaining = remaining_minutes(effect, clock["day"], clock["minutes"])
+    if remaining is not None:
+        tail.append(f"{_fmt_duration(remaining)} remaining")
+    if effect["expires_on_rest"]:
+        tail.append(f"until {effect['expires_on_rest']} rest")
+    if effect["concentration"]:
+        tail.append("concentration")
+    line = effect["name"]
+    if parts:
+        line += f": {', '.join(parts)}"
+    if tail:
+        line += f" ({'; '.join(tail)})"
+    return line
+
+
 def render_character_sheet(
     store: CampaignStore, character_id: int, rules: RulesDB
 ) -> str:
@@ -77,6 +117,11 @@ def render_character_sheet(
         raise KeyError(f"no character with id {character_id}")
     res = store.get_resources(character_id)
     inventory = store.items_for(character_id)
+    clock = store.world_clock()
+    effects = [
+        e for e in store.active_effects_for(character_id)
+        if not clock_expired(e, clock["day"], clock["minutes"])
+    ]
 
     level = char["level"]
     prof = proficiency_bonus(level)
@@ -106,9 +151,13 @@ def render_character_sheet(
         lines.append(f"- {ability.upper()}: {score} ({_fmt_mod(mod)})")
     lines.append("")
 
-    # Defense / vitals
+    # Defense / vitals — AC folds live active effects over the base
+    eff_ac = effective_ac(char["ac"], [e["mechanics"] for e in effects])
     lines.append("## Defense")
-    lines.append(f"- AC: {char['ac']}")
+    if eff_ac != char["ac"]:
+        lines.append(f"- AC: {eff_ac} (base {char['ac']})")
+    else:
+        lines.append(f"- AC: {char['ac']}")
     lines.append(f"- Speed: {char['speed']} ft")
     hp_line = f"- HP: {res['hp']} / {char['max_hp']}"
     if res["temp_hp"]:
@@ -145,6 +194,13 @@ def render_character_sheet(
         else:
             lines.append(f"- Concentrating on: {concentration}")
     lines.append("")
+
+    # Active effects (timed mechanical riders — mage armor, bless, cover)
+    if effects:
+        lines.append("## Active Effects")
+        for effect in effects:
+            lines.append(f"- {_describe_effect(effect, clock)}")
+        lines.append("")
 
     # Death saves — only rendered while dying / with recorded saves
     death = res["death_saves"]

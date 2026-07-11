@@ -38,6 +38,11 @@ from dm_engine.commands.attacks import (
     _monster_defense_sets,
     apply_damage_to_target,
 )
+from dm_engine.commands.effects import (
+    clear_concentration_effects,
+    effective_ac_for_combatant,
+    expire_clock_effects,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.rules.action_economy import TurnBudget
@@ -369,6 +374,7 @@ def cast_spell(
         ctx.store.update_world_clock(
             day=clock["day"] + day_overflow, minutes=minutes
         )
+        expire_clock_effects(ctx)
     elif not is_cantrip:
         slots[str(slot_level)]["remaining"] -= 1
         ctx.store.update_resources(cid, spell_slots=slots)
@@ -379,6 +385,8 @@ def cast_spell(
         existing = ctx.store.get_resources(cid)["concentration"]
         if existing is not None:
             concentration_replaced = existing.get("spell")
+            # Effects the old spell was sustaining end with it.
+            clear_concentration_effects(ctx, cid)
         clock = ctx.store.world_clock()
         ctx.store.update_resources(cid, concentration={
             "spell": spell_slug, "day": clock["day"], "minutes": clock["minutes"],
@@ -547,21 +555,22 @@ def _resolve_damage(
             )
         else:
             mode = "normal"
+        target_ac = effective_ac_for_combatant(ctx, tgt)
         roll = resolve_attack_roll(
-            ctx.roller, prof + abil_mod, tgt["ac"], mode, player_value=pv
+            ctx.roller, prof + abil_mod, target_ac, mode, player_value=pv
         )
         data = {
             **base_data, "tier": 1, "effect": "damage",
             "attack_roll": {
                 "natural": roll.d20.natural, "total": roll.d20.total,
-                "mode": roll.d20.mode, "target_ac": tgt["ac"],
+                "mode": roll.d20.mode, "target_ac": target_ac,
             },
         }
         if not roll.hit:
             data["per_target"] = [{"key": targets[0], "hit": False, "damage": 0}]
             digest = (
                 f"{caster} casts {record.name} but misses {targets[0]} "
-                f"({roll.d20.total} vs AC {tgt['ac']})"
+                f"({roll.d20.total} vs AC {target_ac})"
             )
             return CommandResult(ok=True, command="cast_spell", digest=digest, data=data)
         pdv = player_damage_value if is_pc else None

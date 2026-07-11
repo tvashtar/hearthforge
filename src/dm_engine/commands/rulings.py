@@ -5,7 +5,7 @@ explains *why* the engine's normal rules were set aside.
 
 The ruling carries an optional batch of effect ops (adjust_hp,
 set_condition, clear_condition, adjust_slot, set_exhaustion, adjust_xp,
-note). Every op is validated against current state before any of them
+apply_effect, end_effect, note). Every op is validated against current state before any of them
 apply: a single invalid op refuses the whole batch, untouched (the registry
 wraps every command in one store transaction, but that only rolls back on
 an *exception* — a plain refusal still commits whatever the handler already
@@ -19,6 +19,7 @@ from typing import Any
 
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
+from dm_engine.rules.active_effects import validate_mechanics
 from dm_engine.rules.conditions import CONDITIONS
 
 # The effect-op vocabulary: op name -> its required fields. Single source of
@@ -31,14 +32,23 @@ _OP_FIELDS: dict[str, str] = {
     "adjust_slot": "character, slot_level, delta",
     "set_exhaustion": "target, level (0-6)",
     "adjust_xp": "character, delta",
+    "apply_effect": "target, name, mechanics"
+    " [duration_minutes | expires_on_rest, concentration, concentration_by]",
+    "end_effect": "target, name",
     "note": "text",
 }
 _OPS = tuple(_OP_FIELDS)
+_REST_KINDS = ("short", "long")
+_MINUTES_PER_DAY = 1440
 
 
 def ops_cheatsheet() -> str:
     """The op vocabulary as one line, e.g. "adjust_hp(target, delta); ..."."""
     return "; ".join(f"{name}({fields})" for name, fields in _OP_FIELDS.items())
+
+
+def _effect_name_matches(effect: dict, name: str) -> bool:
+    return effect["name"].lower() == name.strip().lower()
 
 
 def _resolve_target(ctx: CommandContext, target: str):
@@ -133,6 +143,56 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return f"no character named {character!r}"
         return None
 
+    if kind == "apply_effect":
+        target, name = op.get("target"), op.get("name")
+        if not isinstance(target, str) or not target:
+            return "apply_effect requires a target"
+        if not isinstance(name, str) or not name.strip():
+            return "apply_effect requires a non-empty effect name"
+        rkind, _, _ = _resolve_target(ctx, target)
+        if rkind == "unknown":
+            return f"unknown target {target!r}"
+        if rkind == "monster":
+            return f"{target} is a monster; active effects track on characters only"
+        reason = validate_mechanics(op.get("mechanics", {}))
+        if reason is not None:
+            return f"apply_effect: {reason}"
+        duration = op.get("duration_minutes")
+        if duration is not None and (
+            not isinstance(duration, int) or isinstance(duration, bool) or duration <= 0
+        ):
+            return "apply_effect duration_minutes must be a positive integer"
+        rest = op.get("expires_on_rest")
+        if rest is not None and rest not in _REST_KINDS:
+            return "apply_effect expires_on_rest must be 'short' or 'long'"
+        concentration = op.get("concentration", False)
+        if not isinstance(concentration, bool):
+            return "apply_effect concentration must be a boolean"
+        by = op.get("concentration_by")
+        if by is not None:
+            if not concentration:
+                return "apply_effect concentration_by requires concentration=true"
+            if not isinstance(by, str) or ctx.store.get_character(by) is None:
+                return f"no character named {by!r} to hold concentration"
+        return None
+
+    if kind == "end_effect":
+        target, name = op.get("target"), op.get("name")
+        if not isinstance(target, str) or not target:
+            return "end_effect requires a target"
+        if not isinstance(name, str) or not name.strip():
+            return "end_effect requires a non-empty effect name"
+        rkind, char, _ = _resolve_target(ctx, target)
+        if rkind == "unknown":
+            return f"unknown target {target!r}"
+        if rkind == "monster":
+            return f"{target} is a monster; active effects track on characters only"
+        effects = ctx.store.active_effects_for(char["id"])
+        if not any(_effect_name_matches(e, name) for e in effects):
+            active = ", ".join(e["name"] for e in effects) or "none"
+            return f"{target} has no active effect named {name!r} (active: {active})"
+        return None
+
     # note
     text = op.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -216,6 +276,53 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
         xp = max(0, char["xp"] + delta)
         ctx.store.update_character(char["id"], xp=xp)
         return {"op": "adjust_xp", "character": character, "delta": delta, "xp": xp}
+
+    if kind == "apply_effect":
+        target = op["target"]
+        _, char, _ = _resolve_target(ctx, target)
+        name = op["name"].strip()
+        mechanics = op.get("mechanics") or {}
+        expires_day = expires_minutes = None
+        duration = op.get("duration_minutes")
+        if duration is not None:
+            clock = ctx.store.world_clock()
+            expires_day, expires_minutes = divmod(
+                clock["day"] * _MINUTES_PER_DAY + clock["minutes"] + duration,
+                _MINUTES_PER_DAY,
+            )
+        concentration = bool(op.get("concentration", False))
+        caster_id = None
+        if concentration:
+            by = op.get("concentration_by")
+            caster_id = ctx.store.get_character(by)["id"] if by else char["id"]
+        effect_id = ctx.store.add_effect(
+            char["id"], name=name, mechanics=mechanics,
+            # The event row lands later in this same transaction; the log is
+            # append-only, so its id is knowable now.
+            source_event_id=ctx.store.next_event_id(),
+            expires_day=expires_day, expires_minutes=expires_minutes,
+            expires_on_rest=op.get("expires_on_rest"),
+            concentration=concentration, caster_id=caster_id,
+        )
+        return {
+            "op": "apply_effect", "target": target, "name": name,
+            "effect_id": effect_id, "mechanics": mechanics,
+            "expires_day": expires_day, "expires_minutes": expires_minutes,
+            "expires_on_rest": op.get("expires_on_rest"),
+            "concentration": concentration,
+        }
+
+    if kind == "end_effect":
+        target, name = op["target"], op["name"]
+        _, char, _ = _resolve_target(ctx, target)
+        matches = [
+            e for e in ctx.store.active_effects_for(char["id"])
+            if _effect_name_matches(e, name)
+        ]
+        for effect in matches:
+            ctx.store.delete_effect(effect["id"])
+        return {"op": "end_effect", "target": target,
+                "name": matches[0]["name"], "ended": len(matches)}
 
     # note: no state change; it lands in the event record via `data["applied"]`.
     return {"op": "note", "text": op["text"]}

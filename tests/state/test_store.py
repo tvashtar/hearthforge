@@ -109,6 +109,76 @@ def test_rng_draws_persist(campaigns_dir):
         store.close()
 
 
+def _insert_kira(store) -> int:
+    with store.transaction():
+        return store.insert_character(
+            name="Kira", role="pc", class_slug="fighter", race_slug="human",
+            level=1, abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+            max_hp=12, ac=16, speed=30,
+            proficiencies={"skills": ["athletics"], "saves": ["str", "con"]},
+            attacks=[], spells_known=[], spell_slots={},
+        )
+
+
+def test_active_effects_roundtrip(campaigns_dir):
+    store = _create(campaigns_dir)
+    try:
+        cid = _insert_kira(store)
+        with store.transaction():
+            eid = store.add_effect(
+                cid, name="mage armor", mechanics={"ac_override": 15},
+                source_event_id=7, expires_day=1, expires_minutes=960,
+            )
+            store.add_effect(
+                cid, name="bless", mechanics={}, expires_on_rest="long",
+                concentration=True, caster_id=cid,
+            )
+        effects = store.active_effects_for(cid)
+        assert [e["name"] for e in effects] == ["mage armor", "bless"]
+        armor = effects[0]
+        assert armor["id"] == eid
+        assert armor["mechanics"] == {"ac_override": 15}
+        assert armor["source_event_id"] == 7
+        assert (armor["expires_day"], armor["expires_minutes"]) == (1, 960)
+        assert armor["expires_on_rest"] is None and armor["concentration"] is False
+        bless = effects[1]
+        assert bless["expires_on_rest"] == "long"
+        assert bless["concentration"] is True and bless["caster_id"] == cid
+        with store.transaction():
+            store.delete_effect(eid)
+        assert [e["name"] for e in store.active_effects_for(cid)] == ["bless"]
+        assert [e["name"] for e in store.all_active_effects()] == ["bless"]
+    finally:
+        store.close()
+
+
+def test_open_adds_active_effects_table_to_legacy_campaign(campaigns_dir):
+    # Simulate a pre-TVA-20 campaign: drop the table, then reopen.
+    store = _create(campaigns_dir)
+    store.conn.execute("DROP TABLE active_effects")
+    store.conn.commit()
+    store.close()
+    store = CampaignStore.open(campaigns_dir, "test-camp")
+    try:
+        cid = _insert_kira(store)
+        with store.transaction():
+            store.add_effect(cid, name="shield of faith", mechanics={"ac_bonus": 2})
+        assert store.active_effects_for(cid)[0]["mechanics"] == {"ac_bonus": 2}
+    finally:
+        store.close()
+
+
+def test_next_event_id_tracks_the_append_only_log(campaigns_dir):
+    store = _create(campaigns_dir)
+    try:
+        assert store.next_event_id() == 1
+        with store.transaction():
+            eid = store.append_event(command="x", inputs={}, result={"ok": True}, rolls=[])
+        assert store.next_event_id() == eid + 1
+    finally:
+        store.close()
+
+
 def test_character_and_resources_roundtrip(campaigns_dir):
     store = _create(campaigns_dir)
     try:

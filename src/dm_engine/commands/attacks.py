@@ -20,6 +20,10 @@ import re
 
 from pydantic import ValidationError
 
+from dm_engine.commands.effects import (
+    clear_concentration_effects,
+    effective_ac_for_combatant,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import AttackSpec
@@ -180,11 +184,13 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
 
 
 def _break_concentration(ctx: CommandContext, cid: int) -> bool:
-    """Clear a character's concentration. Returns True if it was concentrating."""
+    """Clear a character's concentration (and every active effect it was
+    sustaining). Returns True if it was concentrating."""
     res = ctx.store.get_resources(cid)
     if res["concentration"] is None:
         return False
     ctx.store.update_resources(cid, concentration=None)
+    clear_concentration_effects(ctx, cid)
     return True
 
 
@@ -328,8 +334,11 @@ def _resolve_swing(
         disadvantage or interaction.mode == "disadvantage"
         or spec["range_disadvantage"],
     )
+    # Character targets fold live active effects (mage armor, shield of
+    # faith) into their AC.
+    target_ac = effective_ac_for_combatant(ctx, tgt)
     roll = resolve_attack_roll(
-        ctx.roller, spec["attack_bonus"], tgt["ac"], mode,
+        ctx.roller, spec["attack_bonus"], target_ac, mode,
         player_value=player_attack_value,
     )
     critical = roll.critical_hit or (roll.hit and interaction.auto_crit_on_hit)
@@ -340,7 +349,7 @@ def _resolve_swing(
             "natural": roll.d20.natural,
             "total": roll.d20.total,
             "mode": roll.d20.mode,
-            "target_ac": tgt["ac"],
+            "target_ac": target_ac,
         },
         "hit": roll.hit,
         "critical": critical,

@@ -9,7 +9,7 @@ player_persona: >
   with Brother Aldric, a dwarf cleric companion. You speak in first person,
   in-character, 1-3 sentences per message. You roll your own physical dice
   when the DM asks: report the raw number the notes for the current goal give
-  you; if the notes give no number, say "/roll" to let the DM roll for you.
+  you; if the notes give no number, say "roll for me" to delegate to the DM.
   Never narrate outcomes yourself; state intent and let the DM resolve it.
 pc_name: Kira
 party:
@@ -85,7 +85,7 @@ beats:
     goal: Bandits attack! Fight them. Engage the nearest bandit in melee with
       your longsword.
     notes: If asked for initiative report 12. If asked for an attack roll
-      report 18, damage 7. On later attacks say "/roll".
+      report 18, damage 7. On later attacks say "roll for me".
     max_player_messages: 8
     done_when: {command: attack, ok: true}
   - id: tier1-heal
@@ -105,7 +105,7 @@ beats:
   - id: wrap-up
     goal: Finish the fight, loot the bodies, and then tell the DM you want to
       end the session here.
-    notes: Say "/roll" for any remaining dice. After looting, say clearly
+    notes: Say "roll for me" for any remaining dice. After looting, say clearly
       "let's end the session here".
     max_player_messages: 10
     done_when: {command: end_session, ok: true}

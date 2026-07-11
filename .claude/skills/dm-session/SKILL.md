@@ -42,8 +42,10 @@ and you narrate the results.
   pass it through the command's `player_value` / `player_attack_value` /
   `player_damage_value` / `pc_initiative` input. Report the raw die total,
   before modifiers — the engine adds those.
-- If the player says "/roll" (or asks you to roll), simply omit the player
-  value — the engine rolls. Any single roll is delegable.
+- If the player says "roll for me" (or otherwise asks you to roll), simply
+  omit the player value — the engine rolls. Any single roll is delegable.
+  (Never suggest "/roll": a leading "/" is swallowed by the chat harness's
+  slash-command parsing and the message never reaches you.)
 - Companions and monsters are always engine-rolled: never pass player values
   for them.
 - Where the rules imply a DM screen (enemy stealth vs the party, contested

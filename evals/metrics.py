@@ -30,17 +30,21 @@ def beat_done(db_path: Path, done_when: dict, *, after_id: int) -> bool:
     return row[0] > 0
 
 
+# Real commands name the acting character differently per command.
+_ACTOR_KEYS = ("actor", "caster", "character", "attacker")
+
+
 def compute_metrics(db_path: Path, transcript_path: Path, pc_name: str = "Kira") -> dict:
     with _connect(db_path) as db:
         events = db.execute(
-            "SELECT id, command, inputs, result FROM event_log ORDER BY id"
+            "SELECT id, command, inputs, result, rolls FROM event_log ORDER BY id"
         ).fetchall()
 
     refusals = sum(
-        1 for _, _, _, res in events if json.loads(res).get("ok") is False
+        1 for _, _, _, res, _ in events if json.loads(res).get("ok") is False
     )
     crashes = sum(
-        1 for _, _, _, res in events
+        1 for _, _, _, res, _ in events
         if str(json.loads(res).get("digest", "")).startswith("ENGINE CRASH")
     )
     retry_loops = 0
@@ -49,17 +53,20 @@ def compute_metrics(db_path: Path, transcript_path: Path, pc_name: str = "Kira")
         if same and not json.loads(prev[3]).get("ok") and not json.loads(cur[3]).get("ok"):
             retry_loops += 1
     orphaned = 0
-    for eid, cmd, _, res in events:
-        if cmd == "cast_spell" and json.loads(res).get("needs_ruling"):
+    for eid, cmd, _, res, _ in events:
+        data = json.loads(res).get("data") or {}
+        if cmd == "cast_spell" and data.get("needs_ruling"):
             followed = any(e[1] == "dm_ruling" and e[0] > eid for e in events)
             if not followed:
                 orphaned += 1
-    polling = sum(1 for _, cmd, _, _ in events if cmd in POLLING_COMMANDS)
+    polling = sum(1 for _, cmd, _, _, _ in events if cmd in POLLING_COMMANDS)
     supplied_violations = 0
-    for _, _, inputs, res in events:
+    for _, _, inputs, _, rolls_json in events:
         parsed_inputs = json.loads(inputs)
-        actor = parsed_inputs.get("actor") or parsed_inputs.get("caster")
-        rolls = json.loads(res).get("rolls") or []
+        actor = next(
+            (parsed_inputs[k] for k in _ACTOR_KEYS if parsed_inputs.get(k)), None
+        )
+        rolls = json.loads(rolls_json or "[]")
         supplied = any(isinstance(r, dict) and r.get("player_supplied") for r in rolls)
         if actor and actor != pc_name and supplied:
             supplied_violations += 1
@@ -71,8 +78,10 @@ def compute_metrics(db_path: Path, transcript_path: Path, pc_name: str = "Kira")
             player_messages += 1
         elif entry["type"] == "tool_call":
             tool_calls += 1
-            if entry.get("is_error"):
+            if entry.get("is_error"):  # legacy pre-TVA-32 transcript shape
                 schema_rejections += 1
+        elif entry["type"] == "tool_result" and entry.get("is_error"):
+            schema_rejections += 1
 
     return {
         "refusals": refusals,

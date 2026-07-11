@@ -32,6 +32,19 @@ _ABILITY_FULL_NAMES: dict[str, str] = {
     "cha": "charisma",
 }
 
+# TVA-24: refusals for enum-ish inputs echo the full vocabulary so recovery
+# is single-shot, and obvious input variants normalize to the canonical form.
+_VALID_SKILLS = ", ".join(sorted(SKILL_ABILITIES))
+_VALID_ABILITIES = ", ".join(_ABILITIES)
+
+_ABILITY_ALIASES: dict[str, str] = {full: abbr for abbr, full in _ABILITY_FULL_NAMES.items()}
+
+
+def _normalize_ability(ability: str) -> str:
+    """Canonical ability key: lowercased/stripped; full names collapse to it."""
+    key = ability.strip().lower()
+    return _ABILITY_ALIASES.get(key, key)
+
 
 def _find_monster_combatant(ctx: CommandContext, character: str) -> dict | None:
     combat = ctx.store.combat()
@@ -127,20 +140,25 @@ def skill_check(
     gm_only: bool = False,
     **kwargs,
 ) -> CommandResult:
+    skill = normalize_slug(skill)
     char = ctx.store.get_character(character)
     if char is None:
         combatant = _find_monster_combatant(ctx, character)
         if combatant is None:
             return refuse("skill_check", f"no character named {character!r}")
         if skill not in SKILL_ABILITIES:
-            return refuse("skill_check", f"unknown skill {skill!r}")
+            return refuse(
+                "skill_check", f"unknown skill {skill!r} (valid skills: {_VALID_SKILLS})"
+            )
         if dc < 1:
             return refuse("skill_check", f"dc must be >= 1 (got {dc})")
         return _monster_skill_check(
             ctx, combatant, skill, dc, advantage, disadvantage, player_value, gm_only
         )
     if skill not in SKILL_ABILITIES:
-        return refuse("skill_check", f"unknown skill {skill!r}")
+        return refuse(
+            "skill_check", f"unknown skill {skill!r} (valid skills: {_VALID_SKILLS})"
+        )
     if dc < 1:
         return refuse("skill_check", f"dc must be >= 1 (got {dc})")
     reason = _validate_player_value(char, player_value)
@@ -185,11 +203,14 @@ def tool_check(
     """Tool proficiency check. Tools have no fixed ability in RAW (thieves'
     tools + DEX to pick a lock, + INT to recall trap designs), so the
     ability is an explicit argument."""
+    ability = _normalize_ability(ability)
     char = ctx.store.get_character(character)
     if char is None:
         return refuse("tool_check", f"no character named {character!r}")
     if ability not in _ABILITIES:
-        return refuse("tool_check", f"unknown ability {ability!r}")
+        return refuse(
+            "tool_check", f"unknown ability {ability!r} (valid abilities: {_VALID_ABILITIES})"
+        )
     if dc < 1:
         return refuse("tool_check", f"dc must be >= 1 (got {dc})")
     reason = _validate_player_value(char, player_value)
@@ -236,11 +257,14 @@ def saving_throw(
     gm_only: bool = False,
     **kwargs,
 ) -> CommandResult:
+    ability = _normalize_ability(ability)
     char = ctx.store.get_character(character)
     if char is None:
         return refuse("saving_throw", f"no character named {character!r}")
     if ability not in _ABILITIES:
-        return refuse("saving_throw", f"unknown ability {ability!r}")
+        return refuse(
+            "saving_throw", f"unknown ability {ability!r} (valid abilities: {_VALID_ABILITIES})"
+        )
     if dc < 1:
         return refuse("saving_throw", f"dc must be >= 1 (got {dc})")
     reason = _validate_player_value(char, player_value)

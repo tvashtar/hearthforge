@@ -38,6 +38,9 @@ _SPENDS = ("action", "reaction", "none")
 _RANGE_RE = re.compile(r"range (\d+)/(\d+) ft")
 _REACH_RE = re.compile(r"reach (\d+) ft")
 
+# TVA-24: unknown-condition refusals echo the vocabulary for single-shot recovery.
+_VALID_CONDITIONS = ", ".join(sorted(CONDITIONS))
+
 
 # -- shared helpers -------------------------------------------------------
 
@@ -472,8 +475,12 @@ def apply_condition(
     exhaustion_delta: int = 0,
     **kwargs,
 ) -> CommandResult:
+    condition = condition.strip().lower()
     if condition not in CONDITIONS:
-        return refuse("apply_condition", f"unknown condition {condition!r}")
+        return refuse(
+            "apply_condition",
+            f"unknown condition {condition!r} (valid conditions: {_VALID_CONDITIONS})",
+        )
     kind, combatant, char = _resolve_condition_target(ctx, target)
     if kind == "unknown":
         return refuse("apply_condition", f"unknown target {target!r}")
@@ -548,8 +555,12 @@ def _maybe_break_concentration(
 def remove_condition(
     ctx: CommandContext, target: str, condition: str, **kwargs
 ) -> CommandResult:
+    condition = condition.strip().lower()
     if condition not in CONDITIONS:
-        return refuse("remove_condition", f"unknown condition {condition!r}")
+        return refuse(
+            "remove_condition",
+            f"unknown condition {condition!r} (valid conditions: {_VALID_CONDITIONS})",
+        )
     kind, combatant, char = _resolve_condition_target(ctx, target)
     if kind == "unknown":
         return refuse("remove_condition", f"unknown target {target!r}")

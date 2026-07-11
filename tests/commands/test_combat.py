@@ -312,6 +312,36 @@ def test_move_unknown_band_refused(ctx):
     assert result.ok is False
 
 
+def test_move_normalizes_band_input(ctx):
+    # TVA-24: case and padding reach the canonical band name.
+    _start(ctx)
+    active = ctx.store.combat()["combatants"][0]["key"]
+    result = registry.execute("move", ctx, combatant=active, to_band=" Far ")
+    assert result.ok, result.refusal
+    assert result.data["band"] == "far"
+
+
+def test_move_unknown_band_refusal_lists_bands(ctx):
+    _start(ctx)
+    active = ctx.store.combat()["combatants"][0]["key"]
+    result = registry.execute("move", ctx, combatant=active, to_band="orbit")
+    assert result.ok is False
+    for band in ("engaged", "near", "far", "distant"):
+        assert band in result.refusal
+
+
+def test_start_combat_normalizes_monster_band(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "band": " Near"}])
+    assert result.ok, result.refusal
+
+
+def test_start_combat_unknown_band_refusal_lists_bands(ctx):
+    result = _start(ctx, monsters=[{"slug": "goblin", "band": "orbit"}])
+    assert result.ok is False
+    for band in ("engaged", "near", "far", "distant"):
+        assert band in result.refusal
+
+
 def test_move_insufficient_movement_refused(ctx):
     _start(ctx)
     active = ctx.store.combat()["combatants"][0]["key"]

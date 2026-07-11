@@ -121,6 +121,28 @@ def get_campaign_brief(ctx: CommandContext, **kwargs) -> CommandResult:
     return CommandResult(ok=True, command="get_campaign_brief", digest=digest, data=data)
 
 
+@command("open_campaign")
+def open_campaign(ctx: CommandContext, slug: str, **kwargs) -> CommandResult:
+    """Open an existing campaign (rehydrating its brief) as the active context.
+
+    The MCP server (and `dm resume`) build the campaign context first, then
+    run this through the registry so every session start is a first-class
+    audit event (TVA-26): logged under its own name, with real event_ids.
+    """
+    meta = ctx.store.campaign_meta()
+    if slug != meta["slug"]:
+        return refuse(
+            "open_campaign",
+            f"slug {slug!r} does not match the open campaign {meta['slug']!r}",
+        )
+    brief = get_campaign_brief(ctx)
+    return CommandResult(
+        ok=True, command="open_campaign",
+        digest=f"Campaign {slug} opened — {brief.digest}",
+        data=brief.data,
+    )
+
+
 @command("end_session")
 def end_session(ctx: CommandContext, recap: str, **kwargs) -> CommandResult:
     if not recap.strip():

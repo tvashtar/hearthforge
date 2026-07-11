@@ -38,6 +38,9 @@ _SPEED_RE = re.compile(r"(\d+)")
 
 _MONSTER_ENTRY_FIELDS = {"slug", "count", "band", "label"}
 
+# TVA-24: unknown-band refusals echo the vocabulary for single-shot recovery.
+_VALID_BANDS = ", ".join(BAND_ORDER)
+
 
 def _monster_speed(record) -> int:
     """Parse walk speed (e.g. '30 ft.') from a monster record; default 30."""
@@ -132,8 +135,12 @@ def start_combat(
         if not isinstance(count, int) or count < 1:
             return refuse("start_combat", f"count must be a positive integer: {count!r}")
         band = entry.get("band", "near")
+        if isinstance(band, str):
+            band = band.strip().lower()
         if band not in BAND_ORDER:
-            return refuse("start_combat", f"unknown band {band!r}")
+            return refuse(
+                "start_combat", f"unknown band {band!r} (valid bands: {_VALID_BANDS})"
+            )
         label = entry.get("label")
         for i in range(count):
             name = label if label is None or count == 1 else f"{label} {i + 1}"
@@ -292,8 +299,9 @@ def move(
     actor = _active_combatant(combat, combatant)
     if actor is None:
         return refuse("move", f"it is not {combatant}'s turn")
+    to_band = to_band.strip().lower()
     if to_band not in BAND_ORDER:
-        return refuse("move", f"unknown band {to_band!r}")
+        return refuse("move", f"unknown band {to_band!r} (valid bands: {_VALID_BANDS})")
     if actor["budget"] is None:
         return refuse("move", f"{combatant} has no movement this turn")
     if not _condition_effects(ctx, actor).can_move:

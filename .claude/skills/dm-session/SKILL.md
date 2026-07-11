@@ -172,6 +172,7 @@ companions IN FICTION — they are recruited through play, not spawned.
 Full power, two obligations: a written `rationale` (mandatory — the command
 refuses without it), and restraint (prefer engine commands whenever one
 fits). Rulings are prominently marked in the audit trail (`dm audit`).
+Effect ops for `effects` (one object per op, applied atomically): `adjust_hp(target, delta)`; `set_condition`/`clear_condition(target, condition)`; `adjust_slot(character, slot_level, delta)`; `set_exhaustion(target, level)`; `adjust_xp(character, delta)`; `note(text)`.
 
 ## The character sheet
 

@@ -119,6 +119,26 @@ def test_apply_condition_validates_and_breaks_concentration(ctx):
     assert result.data.get("concentration_broken") is True
 
 
+def test_condition_commands_normalize_input(ctx):
+    # TVA-24: case and padding reach the canonical condition name.
+    result = registry.execute("apply_condition", ctx, target="Kira", condition=" Prone ")
+    assert result.ok, result.refusal
+    assert result.data["condition"] == "prone"
+    result = registry.execute("remove_condition", ctx, target="Kira", condition="PRONE")
+    assert result.ok, result.refusal
+
+
+def test_unknown_condition_refusal_lists_vocabulary(ctx):
+    from dm_engine.rules.conditions import CONDITIONS
+
+    bad = registry.execute("apply_condition", ctx, target="Kira", condition="sleepy")
+    assert bad.ok is False
+    for condition in CONDITIONS:  # all 15, single-shot recovery
+        assert condition in bad.refusal
+    bad = registry.execute("remove_condition", ctx, target="Kira", condition="sleepy")
+    assert bad.ok is False and "blinded" in bad.refusal
+
+
 # --- refusal matrix -----------------------------------------------------
 
 

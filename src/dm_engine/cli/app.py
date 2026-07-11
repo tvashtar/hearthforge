@@ -113,7 +113,9 @@ def resume_campaign(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     try:
-        result = execute("get_campaign_brief", ctx)
+        # Through the registry under its own name so this session start is a
+        # first-class audit event (TVA-26), same as the MCP open_campaign tool.
+        result = execute("open_campaign", ctx, slug=slug)
     finally:
         ctx.store.close()
     typer.echo(result.model_dump_json(indent=2))

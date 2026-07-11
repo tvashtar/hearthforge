@@ -21,10 +21,24 @@ from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.rules.conditions import CONDITIONS
 
-_OPS = (
-    "adjust_hp", "set_condition", "clear_condition", "adjust_slot",
-    "set_exhaustion", "adjust_xp", "note",
-)
+# The effect-op vocabulary: op name -> its required fields. Single source of
+# truth (TVA-25) — _validate_op, the unknown-op refusal, and the MCP tool
+# description (dm_ruling.__doc__ below) all derive from this table.
+_OP_FIELDS: dict[str, str] = {
+    "adjust_hp": "target, delta",
+    "set_condition": "target, condition",
+    "clear_condition": "target, condition",
+    "adjust_slot": "character, slot_level, delta",
+    "set_exhaustion": "target, level (0-6)",
+    "adjust_xp": "character, delta",
+    "note": "text",
+}
+_OPS = tuple(_OP_FIELDS)
+
+
+def ops_cheatsheet() -> str:
+    """The op vocabulary as one line, e.g. "adjust_hp(target, delta); ..."."""
+    return "; ".join(f"{name}({fields})" for name, fields in _OP_FIELDS.items())
 
 
 def _resolve_target(ctx: CommandContext, target: str):
@@ -51,7 +65,7 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         return f"effect op must be an object, got {op!r}"
     kind = op.get("op")
     if kind not in _OPS:
-        return f"unknown op {kind!r}"
+        return f"unknown op {kind!r} (valid ops: {', '.join(_OPS)})"
 
     if kind == "adjust_hp":
         target, delta = op.get("target"), op.get("delta")
@@ -69,7 +83,10 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         if not isinstance(target, str) or not target:
             return f"{kind} requires a target"
         if condition not in CONDITIONS:
-            return f"unknown condition {condition!r}"
+            return (
+                f"unknown condition {condition!r} "
+                f"(valid conditions: {', '.join(sorted(CONDITIONS))})"
+            )
         rkind, _, _ = _resolve_target(ctx, target)
         if rkind == "unknown":
             return f"unknown target {target!r}"
@@ -230,6 +247,16 @@ def dm_ruling(
         ok=True, command="dm_ruling", digest=description,
         data={"applied": applied}, gm_only=gm_only,
     )
+
+
+# The MCP tool description is introspected from the first docstring line
+# (mcp/server.py `_description`), so the op cheatsheet must live there: one
+# line, built from _OP_FIELDS at import time so it can never drift (TVA-25).
+dm_ruling.__doc__ = (
+    "Log a DM ruling (mandatory rationale) and apply its `effects` ops "
+    "atomically — one invalid op refuses the whole batch. "
+    f"Effect ops: {ops_cheatsheet()}."
+)
 
 
 @command("roll_dice")

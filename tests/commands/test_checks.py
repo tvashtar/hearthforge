@@ -3,6 +3,7 @@ import json
 import pytest
 
 from dm_engine.commands import registry
+from dm_engine.models.character import SKILL_ABILITIES
 from dm_engine.rules.checks import ability_modifier
 
 pytestmark = pytest.mark.usefixtures("party")  # implementer adds a fixture creating Kira (PC) + Brother Aldric (companion) via registry
@@ -71,6 +72,23 @@ def test_skill_check_unknown_skill_refused(ctx):
     assert result.ok is False and "skill" in result.refusal.lower()
 
 
+def test_skill_check_normalizes_skill_input(ctx):
+    # TVA-24: underscores, spaces, case, and padding all reach the canonical slug.
+    for raw in ("sleight_of_hand", "Sleight of Hand", " SLEIGHT-OF-HAND "):
+        result = registry.execute("skill_check", ctx, character="Kira",
+                                  skill=raw, dc=10, player_value=10)
+        assert result.ok, result.refusal
+        assert result.data["skill"] == "sleight-of-hand"
+
+
+def test_skill_check_unknown_skill_refusal_lists_all_slugs(ctx):
+    result = registry.execute("skill_check", ctx, character="Kira",
+                              skill="basketweaving", dc=10)
+    assert result.ok is False
+    for slug in SKILL_ABILITIES:  # all 18 canonical slugs, single-shot recovery
+        assert slug in result.refusal
+
+
 def test_skill_check_dc_below_one_refused(ctx):
     result = registry.execute("skill_check", ctx, character="Kira", skill="athletics", dc=0)
     assert result.ok is False
@@ -129,6 +147,30 @@ def test_saving_throw_no_proficiency_no_bonus(ctx):
 def test_saving_throw_unknown_ability_refused(ctx):
     result = registry.execute("saving_throw", ctx, character="Kira", ability="luck", dc=10)
     assert result.ok is False
+
+
+def test_saving_throw_normalizes_ability_input(ctx):
+    # TVA-24: case/padding and full ability names collapse to the 3-letter key.
+    for raw in ("STR", " Strength "):
+        result = registry.execute("saving_throw", ctx, character="Kira",
+                                  ability=raw, dc=10, player_value=10)
+        assert result.ok, result.refusal
+        assert result.data["ability"] == "str"
+
+
+def test_saving_throw_unknown_ability_refusal_lists_vocabulary(ctx):
+    result = registry.execute("saving_throw", ctx, character="Kira", ability="luck", dc=10)
+    assert result.ok is False
+    for ability in ("str", "dex", "con", "int", "wis", "cha"):
+        assert ability in result.refusal
+
+
+def test_tool_check_normalizes_ability_input(ctx):
+    result = registry.execute("tool_check", ctx, character="Kira",
+                              tool="thieves' tools", ability=" DEX", dc=10,
+                              player_value=10)
+    assert result.ok, result.refusal
+    assert result.data["ability"] == "dex"
 
 
 def test_saving_throw_auto_fails_str_dex_when_paralyzed(ctx):

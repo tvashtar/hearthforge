@@ -117,6 +117,28 @@ def test_ruling_rejects_unknown_op(ctx):
     assert result.ok is False
 
 
+def test_ruling_unknown_op_refusal_lists_valid_ops(ctx):
+    # TVA-25: a wrong op guess costs a committed event row, so the refusal
+    # must teach the full op vocabulary for single-shot recovery.
+    result = registry.execute(
+        "dm_ruling", ctx, description="Odd effect", rationale="testing",
+        effects=[{"op": "teleport", "target": "Kira"}],
+    )
+    assert result.ok is False
+    for op in ("adjust_hp", "set_condition", "clear_condition", "adjust_slot",
+               "set_exhaustion", "adjust_xp", "note"):
+        assert op in result.refusal
+
+
+def test_ruling_unknown_condition_refusal_lists_vocabulary(ctx):
+    result = registry.execute(
+        "dm_ruling", ctx, description="Nap", rationale="testing",
+        effects=[{"op": "set_condition", "target": "Kira", "condition": "sleepy"}],
+    )
+    assert result.ok is False
+    assert "prone" in result.refusal and "stunned" in result.refusal
+
+
 # -- roll_dice ---------------------------------------------------------------
 
 

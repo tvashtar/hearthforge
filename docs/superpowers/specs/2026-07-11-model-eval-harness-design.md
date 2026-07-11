@@ -197,8 +197,14 @@ uv run dm-eval --serial                         # no parallelism, cleanest timin
 uv run dm-eval --judge-only <run-dir>           # re-grade existing bundles
 ```
 
-Default matrix (focused, 4–6 cells): Opus 4.8 low/high, Sonnet 5
-low/high, Haiku 4.5 high. Configurable via `--cells`.
+Default matrix (focused): Haiku 4.5, Sonnet 5, Opus 4.8, Fable 5 — all
+at medium effort. Configurable via `--cells`.
+
+**Run order is always ascending model ability** (Haiku → Sonnet → Opus
+→ Fable), regardless of the order given to `--cells`, so as many cells
+as possible complete before account/usage limits bite. With
+`--parallel`, cells are *launched* in ascending order too; the queue
+never starts a stronger model while a weaker one is still waiting.
 
 `--reps N` reruns each cell with a different campaign seed per rep and
 reports mean/spread. Default 1.
@@ -240,7 +246,9 @@ reports mean/spread. Default 1.
 - Player side: beat-scripted LLM player (fixed cheap model), not a
   verbatim script and not a free-form player.
 - Grading: mechanical metrics + blind judge, both layers required.
-- Default matrix is focused (4–6 cells); full sweeps are opt-in.
+- Default matrix: Haiku 4.5 / Sonnet 5 / Opus 4.8 / Fable 5 at medium
+  effort; full sweeps are opt-in.
+- Cells always run in ascending model ability so limits hit last.
 - 1 rep default; `--reps` for confidence.
 - DM tool allowlist is dm-engine-only during evals.
 - Judge grades transcripts independently (absolute scores).

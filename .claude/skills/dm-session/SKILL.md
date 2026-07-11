@@ -172,6 +172,14 @@ companions IN FICTION — they are recruited through play, not spawned.
   everything else (Tier 2) it consumes the slot, sets concentration, and
   returns `needs_ruling` with the spell text — resolve the effect yourself
   via `dm_ruling` (with a written rationale) immediately after.
+- Tier-2 buffs with a duration (mage armor, shield of faith, bless) are
+  persisted with the `apply_effect` op, never a free-text note: give it
+  `mechanics` (`ac_override`/`ac_bonus`, or `note` for un-modeled riders),
+  a `duration_minutes` or `expires_on_rest`, and for concentration spells
+  `concentration=true` + `concentration_by=<caster>`. The engine then folds
+  the effect into attack math and the sheet, expires it with the clock and
+  rests, and clears it when concentration breaks. Dismissals go through
+  `end_effect`.
 - Concentration checks after damage come back in the attack result
   (`concentration_check.dc`) — prompt the player's CON save (or roll the
   companion's) with `saving_throw`, and `break_concentration` on failure.
@@ -189,3 +197,9 @@ Effect ops for `effects` (one object per op, applied atomically): `adjust_hp(tar
 The engine materializes `campaigns/<slug>/sheets/<character>.md` after every
 command — tell the player to keep their sheet open in an editor; it live-
 updates. `dm sheet <name> --campaign <slug>` prints it on demand.
+
+The sheet is a reference, not just a display: it lists class features by
+level, every known spell with level/components/ritual/concentration, and
+active effects (with the effective AC). Answer tactical questions like
+"what can we cast in silence?" from the sheets — reserve `lookup_spell` /
+`lookup_feature` for full rules text.

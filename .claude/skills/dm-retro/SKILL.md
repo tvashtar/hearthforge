@@ -17,6 +17,16 @@ commands, never open a multi-MB `.jsonl` fully — stream with `jq`/`rg`.
 ## Step 0 — pin the session window
 
 ```bash
+# session starts are first-class audit events (TVA-26)
+sqlite3 campaigns/<slug>/campaign.sqlite \
+  "SELECT id, created_at FROM event_log WHERE command='open_campaign'"
+# session = rows from one open_campaign to the next (or to end of log)
+```
+
+For sessions played before TVA-26 landed, fall back to reconstructing the
+window from recaps:
+
+```bash
 sqlite3 campaigns/<slug>/campaign.sqlite \
   "SELECT id, created_at, kind FROM session_recaps ORDER BY id"
 # session = event_log rows between the prior session_end and this one

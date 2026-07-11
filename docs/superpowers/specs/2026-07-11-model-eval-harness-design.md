@@ -157,9 +157,10 @@ dm-retro's existing queries.
 
 ## Grading layer 2 — blind judge
 
-- Fixed judge config: Opus 4.8, high effort — constant across every
-  cell in a report so scores are comparable; a cell re-run later with
-  the same judge remains comparable.
+- Fixed judge config: latest Opus, high effort — constant across every
+  cell in a report so scores are comparable. The resolved judge model
+  id is recorded in the report; re-grading old bundles after the alias
+  has moved to a newer Opus is what `--judge-only` is for.
 - Judge input: anonymized transcript (model identifiers stripped), the
   scenario spec, the event-log digest, and the `dm-session` skill text
   as the standard being graded against.
@@ -190,15 +191,18 @@ Raw bundles sit alongside for dm-retro-style drill-down.
 
 ```
 uv run dm-eval                                  # default matrix
-uv run dm-eval --cells opus-4-8:high,sonnet-5:low
+uv run dm-eval --cells opus:high,sonnet:low
 uv run dm-eval --reps 3                         # reps per cell, fresh seed per rep
 uv run dm-eval --smoke                          # one Haiku cell, 2 beats: wiring check
 uv run dm-eval --serial                         # no parallelism, cleanest timings
 uv run dm-eval --judge-only <run-dir>           # re-grade existing bundles
 ```
 
-Default matrix (focused): Haiku 4.5, Sonnet 5, Opus 4.8, Fable 5 — all
-at medium effort. Configurable via `--cells`.
+Default matrix (focused): `haiku`, `sonnet`, `opus`, `fable` — all at
+medium effort. Cells use family aliases, not pinned version ids: each
+run resolves to the latest model in that family, and the resolved model
+id is recorded in the run bundle and report for provenance.
+Configurable via `--cells`.
 
 **Run order is always ascending model ability** (Haiku → Sonnet → Opus
 → Fable), regardless of the order given to `--cells`, so as many cells
@@ -246,8 +250,9 @@ reports mean/spread. Default 1.
 - Player side: beat-scripted LLM player (fixed cheap model), not a
   verbatim script and not a free-form player.
 - Grading: mechanical metrics + blind judge, both layers required.
-- Default matrix: Haiku 4.5 / Sonnet 5 / Opus 4.8 / Fable 5 at medium
-  effort; full sweeps are opt-in.
+- Default matrix: haiku / sonnet / opus / fable family aliases (latest
+  version of each, never pinned) at medium effort; full sweeps are
+  opt-in. Resolved model ids recorded for provenance.
 - Cells always run in ascending model ability so limits hit last.
 - 1 rep default; `--reps` for confidence.
 - DM tool allowlist is dm-engine-only during evals.

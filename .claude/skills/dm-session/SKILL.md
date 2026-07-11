@@ -123,11 +123,16 @@ companions IN FICTION — they are recruited through play, not spawned.
    (the deviation is logged).
 2. Drive turns from what results already told you: `next_turn` names the
    actor and its budget, and every attack/move result reports the HP and
-   positions it changed. A monster or companion turn is ONE assistant
-   message: its commands back-to-back (`move`/`engage`/`attack`/…, then
-   `next_turn`), followed by one or two sentences of narration built from
-   the digests. `get_scene_state` is for re-orienting — combat start,
-   after an error, positions genuinely unclear — not a per-turn step.
+   positions it changed. A monster or companion turn is ONE beat: its
+   commands back-to-back (`move`/`engage`/`attack`/…), then one or two
+   sentences of narration built from the digests, and only THEN
+   `next_turn` for the next actor. Narrate play-by-play, not in arrears:
+   the player watches the fight unfold actor by actor, so never chain a
+   second actor's commands before the previous actor's narration has been
+   emitted — a silent multi-turn tool-call run that ends in one big
+   narration dump is a pacing bug. `get_scene_state` is for re-orienting —
+   combat start, after an error, positions genuinely unclear — not a
+   per-turn step.
 3. Range bands: engaged/near/far/distant. Leaving `engaged` without
    Disengage provokes — the result lists provokers; resolve each as a
    reaction `attack` (spend="reaction").

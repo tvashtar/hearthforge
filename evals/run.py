@@ -80,11 +80,15 @@ def grade_run_dir(run_dir: Path) -> list[dict]:
         client = None
     results = []
     for bundle in sorted(p for p in run_dir.iterdir() if p.is_dir()):
-        timing = json.loads((bundle / "timing.json").read_text())
-        metrics = compute_metrics(bundle / "campaign.sqlite", bundle / "transcript.jsonl")
-        transcript = anonymize(
-            (bundle / "transcript.jsonl").read_text(), [timing.get("resolved_model") or ""]
-        )
+        try:
+            timing = json.loads((bundle / "timing.json").read_text())
+            metrics = compute_metrics(bundle / "campaign.sqlite", bundle / "transcript.jsonl")
+            transcript = anonymize(
+                (bundle / "transcript.jsonl").read_text(), [timing.get("resolved_model") or ""]
+            )
+        except Exception as exc:  # one malformed bundle must not sink the whole grading
+            print(f"skipping unreadable bundle {bundle.name}: {exc}")
+            continue
         judge = judge_transcript(client, transcript, scenario_yaml, skill_text)
         turns = timing.get("turns", [])
         walls = sorted(t["wall_s"] for t in turns) or [0.0]

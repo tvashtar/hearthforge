@@ -29,7 +29,9 @@
 - Modify: `pyproject.toml`
 - Modify: `.gitignore`
 - Create: `evals/__init__.py`, `evals/cells.py`, `evals/run.py`
-- Test: `tests/evals/__init__.py`, `tests/evals/test_cells.py`
+- Test: `tests/evals/test_cells.py` (NO `__init__.py` in tests/evals — `tests/` is not a
+  package, so an `__init__.py` there would import as top-level `evals` and shadow the real
+  package)
 
 **Interfaces:**
 - Produces: `Cell` dataclass (`model: str`, `effort: str`, `slug` property), `parse_cells(spec: str | None) -> list[Cell]` (sorted ascending ability), `ABILITY_ORDER`, `dm-eval` console script with `--cells --reps --parallel --serial --smoke --judge-only` flags.
@@ -176,7 +178,7 @@ if __name__ == "__main__":
     main()
 ```
 
-Create empty `evals/__init__.py` and `tests/evals/__init__.py`.
+Create empty `evals/__init__.py`. Do NOT create `tests/evals/__init__.py` (see Files note).
 
 - [ ] **Step 5: Run tests, lint, commit**
 

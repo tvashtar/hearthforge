@@ -149,7 +149,7 @@ JSON record.
 | `equipment` | `category` |
 | `magic_items` | `rarity` |
 | `conditions` | — |
-| `features` | `class_slug`, `level` |
+| `features` | `class_slug`, `level`, `description` (full text; subclass features carry a `subclass` key inside `data`) |
 | `class_levels` | PK (`class_slug`, `level`): `prof_bonus`, spellcasting table, feature list |
 | `srd_text` | FTS5 full-text index over the SRD prose (`source`, `heading_path`, `heading`, `body`) — backs `lookup_rule` |
 | `meta` | at least `edition = 2014`, `srd_version = 5.1` |

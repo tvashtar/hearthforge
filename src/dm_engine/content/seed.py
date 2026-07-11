@@ -35,7 +35,8 @@ CREATE TABLE equipment (slug TEXT PRIMARY KEY, name TEXT NOT NULL, category TEXT
 CREATE TABLE magic_items (slug TEXT PRIMARY KEY, name TEXT NOT NULL, rarity TEXT, data TEXT NOT NULL);
 CREATE TABLE conditions (slug TEXT PRIMARY KEY, name TEXT NOT NULL, data TEXT NOT NULL);
 CREATE TABLE features (
-    slug TEXT PRIMARY KEY, name TEXT NOT NULL, class_slug TEXT, level INTEGER, data TEXT NOT NULL
+    slug TEXT PRIMARY KEY, name TEXT NOT NULL, class_slug TEXT, level INTEGER,
+    description TEXT, data TEXT NOT NULL
 );
 CREATE TABLE class_levels (
     class_slug TEXT, level INTEGER, prof_bonus INTEGER,
@@ -114,7 +115,11 @@ def build_rules_db(structured_dir: Path, text_dir: Path, dest: Path) -> dict[str
         (
             "5e-SRD-Features.json",
             "features",
-            lambda r: (r.get("class", {}).get("index"), r.get("level")),
+            lambda r: (
+                r.get("class", {}).get("index"),
+                r.get("level"),
+                "\n\n".join(r.get("desc", [])),
+            ),
         ),
     ]
     for filename, table, extra_cols in simple_tables:

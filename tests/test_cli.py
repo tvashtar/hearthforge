@@ -41,6 +41,31 @@ def test_seed_and_lookup_cli(tmp_path):
     assert result.exit_code == 1
 
 
+def test_lookup_feature_cli(rules_path):
+    result = runner.invoke(app, ["lookup", "feature", "cunning-action", "--db", str(rules_path)])
+    assert result.exit_code == 0
+    assert '"name": "Cunning Action"' in result.output
+    assert "Dash, Disengage, or Hide" in result.output
+
+    result = runner.invoke(app, ["lookup", "feature", "nonexistent", "--db", str(rules_path)])
+    assert result.exit_code == 1
+
+
+def test_sheet_cli_renders_features(tmp_path, rules_path):
+    campaigns_dir = tmp_path / "campaigns"
+    _bootstrap_campaign_with_ruling(campaigns_dir, rules_path, "sheet-test")
+
+    result = runner.invoke(app, [
+        "sheet", "Kira",
+        "--campaign", "sheet-test",
+        "--campaigns-dir", str(campaigns_dir),
+        "--db", str(rules_path),
+    ])
+    assert result.exit_code == 0
+    assert "## Features" in result.output
+    assert "Second Wind" in result.output  # level-1 fighter class feature
+
+
 def _bootstrap_campaign_with_ruling(campaigns_dir, rules_path, slug):
     ctx = bootstrap_campaign(
         campaigns_dir, rules_path, slug=slug, name="Test Campaign",

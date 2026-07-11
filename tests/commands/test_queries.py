@@ -41,6 +41,18 @@ def test_lookup_spell_refuses_unknown_slug(ctx):
     assert result.ok is False
 
 
+def test_lookup_feature_round_trips_full_record(ctx):
+    result = registry.execute("lookup_feature", ctx, slug="cunning-action")
+    assert result.ok
+    assert result.data["name"] == "Cunning Action"
+    assert any("Dash, Disengage, or Hide" in p for p in result.data["desc"])
+
+
+def test_lookup_feature_refuses_unknown_slug(ctx):
+    result = registry.execute("lookup_feature", ctx, slug="nonexistent")
+    assert result.ok is False
+
+
 def test_lookup_commands_log_events(ctx):
     before = ctx.store.event_count()
     registry.execute("lookup_rule", ctx, query="grappling")

@@ -46,7 +46,9 @@ from the recap.
 - You roll your own character's dice and report the raw totals; the engine
   rolls everything else and records every die in an audit log.
 - Keep your character sheet open in an editor —
-  `campaigns/<slug>/sheets/<you>.md` live-updates as you play.
+  `campaigns/<slug>/sheets/<you>.md` live-updates as you play, including
+  your class features for your current level and per-spell tags (level,
+  V/S/M components, ritual, concentration).
 - No permission prompts: `.mcp.json` wires up the engine and the committed
   project settings preapprove the gameplay tools.
 
@@ -74,7 +76,7 @@ a live session:
 - `dm sheet <character> --campaign <slug>` — print a character's rendered
   markdown sheet (read-only, no snapshot).
 - `dm lookup` — query the seeded SRD rules database (`rule`, `monster`,
-  `spell` subcommands).
+  `spell`, `feature` subcommands).
 - `dm new` — create a new campaign with a minimal skeleton.
 - `dm resume` — open a campaign (snapshotting it) and print the session
   brief.

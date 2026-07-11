@@ -34,6 +34,44 @@ def test_search_spells_by_level(rules_db):
     assert all(s.level == 0 for s in cantrips)
 
 
+def test_get_feature_returns_full_record(rules_db):
+    with RulesDB(rules_db) as db:
+        feat = db.get_feature("cunning-action")
+        assert db.get_feature("nonexistent") is None
+    assert feat is not None
+    assert feat["name"] == "Cunning Action"
+    assert any("Dash, Disengage, or Hide" in p for p in feat["desc"])
+
+
+def test_class_features_accumulate_by_level(rules_db):
+    with RulesDB(rules_db) as db:
+        l1 = {f.slug for f in db.class_features("rogue", 1)}
+        l2 = {f.slug for f in db.class_features("rogue", 2)}
+    assert {"sneak-attack", "thieves-cant", "rogue-expertise-1"} <= l1
+    assert "cunning-action" not in l1
+    assert "cunning-action" in l2
+    assert l1 <= l2  # leveling only adds features
+
+
+def test_class_features_carry_name_level_description(rules_db):
+    with RulesDB(rules_db) as db:
+        feats = {f.slug: f for f in db.class_features("rogue", 2)}
+    cunning = feats["cunning-action"]
+    assert cunning.name == "Cunning Action"
+    assert cunning.level == 2
+    assert "bonus action" in cunning.description.lower()
+
+
+def test_class_features_exclude_subclass_and_option_records(rules_db):
+    with RulesDB(rules_db) as db:
+        slugs = {f.slug for f in db.class_features("fighter", 3)}
+    assert {"second-wind", "action-surge-1-use", "fighter-fighting-style"} <= slugs
+    # Choice sub-options (parented records) and subclass features are not
+    # class-wide grants — they must not appear.
+    assert "fighter-fighting-style-archery" not in slugs
+    assert "improved-critical" not in slugs  # Champion (subclass), level 3
+
+
 def test_lookup_rule_returns_grappling_section(rules_db):
     with RulesDB(rules_db) as db:
         hits = db.lookup_rule("grappling")

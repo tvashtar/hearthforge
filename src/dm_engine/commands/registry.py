@@ -106,7 +106,7 @@ def execute(name: str, ctx: CommandContext, /, **kwargs) -> CommandResult:
             ctx.store.set_rng_draws(ctx.roller.draws)
             ctx.store.set_rng_state(json.dumps(ctx.roller.getstate()))
             if result.ok:
-                sheets.write_party_sheets(ctx.store)
+                sheets.write_party_sheets(ctx.store, ctx.rules)
     except Exception as exc:
         # The rollback just erased this command's event row along with its
         # state mutations, leaving a hole in the append-only audit log
@@ -162,7 +162,7 @@ def open_campaign_context(
     rules = RulesDB(rules_db_path)
     notes = normalize_characters(store, rules)
     if notes:
-        sheets.write_party_sheets(store)
+        sheets.write_party_sheets(store, rules)
     meta = store.campaign_meta()
     if meta.get("rng_state") is not None:
         roller = RecordingRoller(meta["rng_seed"])

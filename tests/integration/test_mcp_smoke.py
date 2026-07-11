@@ -28,9 +28,11 @@ async def test_mcp_smoke(tmp_path, rules_path):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            tools = {t.name for t in (await session.list_tools()).tools}
+            tool_names = [t.name for t in (await session.list_tools()).tools]
+            tools = set(tool_names)
             expected = set(registered_commands()) | {"create_campaign", "open_campaign"}
             assert tools == expected  # 1:1, nothing missing, nothing extra
+            assert len(tool_names) == len(tools)  # no duplicates
 
             # refusal before a campaign is open — still an FC-1 envelope
             early = await session.call_tool("lookup_rule", {"query": "grappling"})
@@ -43,6 +45,14 @@ async def test_mcp_smoke(tmp_path, rules_path):
             })
             envelope = json.loads(result.content[0].text)
             assert envelope["ok"] is True
+            assert envelope["event_ids"]  # bootstrap's create_campaign audit row
+
+            # TVA-26: reopening logs an `open_campaign` event under its own
+            # name and echoes the event id — session starts are queryable.
+            result = await session.call_tool("open_campaign", {"slug": "smoke"})
+            envelope = json.loads(result.content[0].text)
+            assert envelope["ok"] is True and envelope["command"] == "open_campaign"
+            assert envelope["event_ids"]
 
             result = await session.call_tool("create_character", {
                 "name": "Kira", "role": "pc", "class_slug": "fighter",

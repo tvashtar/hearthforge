@@ -122,13 +122,6 @@ _CREATE_CAMPAIGN_SCHEMA = {
     "required": ["slug", "name", "skeleton"],
 }
 
-_OPEN_CAMPAIGN_SCHEMA = {
-    "type": "object",
-    "properties": {"slug": {"type": "string"}},
-    "required": ["slug"],
-}
-
-
 def _text(result: CommandResult) -> list[TextContent]:
     return [TextContent(type="text", text=result.model_dump_json())]
 
@@ -161,15 +154,13 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
             )
             for name, handler in commands.items()
         ]
+        # open_campaign is a registered command (its schema is introspected
+        # above); only create_campaign has no handler to introspect, because
+        # it runs before any store exists.
         tools.append(Tool(
             name="create_campaign",
             description="Create a new campaign and make it the active context.",
             inputSchema=_CREATE_CAMPAIGN_SCHEMA,
-        ))
-        tools.append(Tool(
-            name="open_campaign",
-            description="Open an existing campaign (rehydrating its brief) as the active context.",
-            inputSchema=_OPEN_CAMPAIGN_SCHEMA,
         ))
         return tools
 
@@ -183,20 +174,19 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
                 command="create_campaign",
                 digest=f"Campaign {arguments['name']} created",
                 data={"slug": arguments["slug"]},
+                # bootstrap logged the create_campaign event itself; echo its
+                # id so the envelope's event_ids is real (TVA-26).
+                event_ids=[e["id"] for e in ctx.store.events_tail(1)],
             )
             return _text(result)
 
         if name == "open_campaign":
+            # Build the context first (there is no open store yet), then run
+            # the registered command so the session start is logged under its
+            # own name with real event_ids (TVA-26).
             ctx = open_campaign_context(campaigns_dir, arguments["slug"], rules_db_path)
             activate(ctx)
-            brief = execute("get_campaign_brief", ctx)
-            result = CommandResult(
-                ok=True,
-                command="open_campaign",
-                digest=f"Campaign {arguments['slug']} opened",
-                data=brief.data,
-            )
-            return _text(result)
+            return _text(execute("open_campaign", ctx, **arguments))
 
         ctx = active["ctx"]
         if ctx is None:

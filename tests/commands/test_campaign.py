@@ -39,6 +39,24 @@ def test_end_session_requires_recap(ctx):
     assert result.ok is False
 
 
+def test_open_campaign_logs_under_its_own_name_with_event_ids(ctx):
+    # TVA-26: session starts must be queryable as `command='open_campaign'`
+    # audit rows, with the event id echoed on the envelope.
+    result = registry.execute("open_campaign", ctx, slug="t")
+    assert result.ok and result.command == "open_campaign"
+    assert result.event_ids
+    row = ctx.store.conn.execute(
+        "SELECT command FROM event_log WHERE id = ?", (result.event_ids[0],)
+    ).fetchone()
+    assert row["command"] == "open_campaign"
+    assert result.data["campaign"]["slug"] == "t"  # carries the brief payload
+
+
+def test_open_campaign_slug_mismatch_refused(ctx):
+    result = registry.execute("open_campaign", ctx, slug="someone-else")
+    assert result.ok is False
+
+
 # -- implementer's own per-command mutation+event tests -----------------
 
 

@@ -47,6 +47,47 @@ def travel(
     )
 
 
+_MAX_CLOCK_JUMP_DAYS = 30
+
+
+@command("advance_clock")
+def advance_clock(
+    ctx: CommandContext, days: int = 0, minutes: int = 0,
+    reason: str | None = None, **kwargs,
+) -> CommandResult:
+    """Advance the world clock without travel or rest (TVA-28).
+
+    Reconciles the engine's time authority with narrated fiction (e.g. a
+    narrated overnight that involved neither `rest` nor `travel`), through
+    the normal audited registry path.
+    """
+    if days < 0 or minutes < 0:
+        return refuse("advance_clock",
+                      "the clock only moves forward — days and minutes must not be negative")
+    if days == 0 and minutes == 0:
+        return refuse("advance_clock", "nothing to advance: pass days and/or minutes")
+    if days + minutes / 1440 > _MAX_CLOCK_JUMP_DAYS:
+        return refuse(
+            "advance_clock",
+            f"refusing to jump more than {_MAX_CLOCK_JUMP_DAYS} days at once —"
+            " advance in smaller steps if the fiction really skipped that far",
+        )
+
+    clock = ctx.store.world_clock()
+    day_overflow, new_minutes = divmod(clock["minutes"] + minutes, 1440)
+    new_day = clock["day"] + days + day_overflow
+    ctx.store.update_world_clock(day=new_day, minutes=new_minutes)
+    new_clock = ctx.store.world_clock()
+    why = f" — {reason}" if reason else ""
+    return CommandResult(
+        ok=True, command="advance_clock",
+        digest=(f"Clock advanced to day {new_day},"
+                f" {new_minutes // 60:02d}:{new_minutes % 60:02d}{why}"),
+        data={"clock": new_clock, "advanced": {"days": days, "minutes": minutes},
+              "reason": reason},
+    )
+
+
 @command("create_npc")
 def create_npc(
     ctx: CommandContext,
@@ -126,11 +167,25 @@ def create_location(
 
 @command("update_quest")
 def update_quest(
-    ctx: CommandContext, slug: str, title: str, status: str = "open",
-    notes: str = "", **kwargs,
+    ctx: CommandContext, slug: str, title: str | None = None,
+    status: str | None = None, notes: str | None = None, **kwargs,
 ) -> CommandResult:
-    if status not in _QUEST_STATUSES:
+    if status is not None and status not in _QUEST_STATUSES:
         return refuse("update_quest", f"invalid quest status {status!r}")
+
+    existing = ctx.store.get_quest(slug)
+    if existing is None:
+        # First insert: title is required, defaults fill the rest.
+        if title is None:
+            return refuse("update_quest", f"new quest {slug!r} needs a title")
+        status = status if status is not None else "open"
+        notes = notes if notes is not None else ""
+    else:
+        # Update: omitted fields preserve the stored values (TVA-23).
+        title = title if title is not None else existing["title"]
+        status = status if status is not None else existing["status"]
+        notes = notes if notes is not None else existing["notes"]
+
     ctx.store.upsert_quest(slug, title, status, notes)
     return CommandResult(
         ok=True, command="update_quest", digest=f"Quest {title} updated ({status})",

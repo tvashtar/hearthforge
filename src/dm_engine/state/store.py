@@ -437,6 +437,10 @@ class CampaignStore:
             (slug, title, status, notes),
         )
 
+    def get_quest(self, slug: str) -> dict | None:
+        row = self.conn.execute("SELECT * FROM quests WHERE slug = ?", (slug,)).fetchone()
+        return dict(row) if row else None
+
     def quests(self, statuses: tuple[str, ...] = ("open", "active")) -> list[dict]:
         marks = ",".join("?" * len(statuses))
         rows = self.conn.execute(

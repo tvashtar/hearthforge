@@ -36,6 +36,7 @@
       "mcp__dm-engine__remove_item",
       "mcp__dm-engine__set_scene",
       "mcp__dm-engine__travel",
+      "mcp__dm-engine__advance_clock",
       "mcp__dm-engine__checkpoint",
       "mcp__dm-engine__create_character",
       "mcp__dm-engine__create_npc",

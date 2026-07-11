@@ -74,7 +74,10 @@ async def _run_all(runs, run_dir: Path, parallel: int, beats_limit: int | None):
 def grade_run_dir(run_dir: Path) -> list[dict]:
     scenario_yaml = SCENARIO_PATH.read_text()
     skill_text = (REPO_ROOT / ".claude/skills/dm-session/SKILL.md").read_text()
-    client = anthropic.Anthropic()
+    try:
+        client = anthropic.Anthropic()
+    except Exception:  # no API creds: judge falls back to headless claude-agent-sdk
+        client = None
     results = []
     for bundle in sorted(p for p in run_dir.iterdir() if p.is_dir()):
         timing = json.loads((bundle / "timing.json").read_text())

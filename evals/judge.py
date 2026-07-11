@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 import anthropic
 from pydantic import BaseModel, Field
 
+from evals import llm
 from evals.cells import ABILITY_ORDER
 
 JUDGE_MODEL = "claude-opus-4-8"
@@ -50,27 +52,51 @@ required to follow the skill document below exactly. Score each dimension 1-5
 You do not know which model produced this transcript. Grade only what is here."""
 
 
+_JSON_ONLY = (
+    "\n\nReply with ONLY a JSON object matching this schema, no prose or markdown "
+    "fences: {\"narrative_quality\": {\"score\": <1-5 int>, \"justification\": str}, "
+    "\"mechanical_fidelity\": {...}, \"ruling_quality\": {...}, "
+    "\"player_experience\": {...}, \"overall_comments\": str}"
+)
+
+
+def _strip_fences(text: str) -> str:
+    text = text.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
+        text = re.sub(r"\n?```$", "", text.strip())
+    return text.strip()
+
+
 def judge_transcript(
-    client: anthropic.Anthropic, transcript_text: str, scenario_yaml: str, skill_text: str
+    client: anthropic.Anthropic | None,
+    transcript_text: str,
+    scenario_yaml: str,
+    skill_text: str,
 ) -> JudgeScores | None:
     user = (
         f"## The skill the DM must follow\n{skill_text}\n\n"
         f"## The scenario being played\n{scenario_yaml}\n\n"
         f"## Transcript\n{transcript_text}"
     )
+    use_api = client is not None and llm.have_api_creds()
     for _ in range(2):  # one retry on malformed output
         try:
-            response = client.messages.parse(
-                model=JUDGE_MODEL,
-                max_tokens=4000,
-                thinking={"type": "adaptive"},
-                output_config={"effort": "high"},
-                system=_RUBRIC,
-                messages=[{"role": "user", "content": user}],
-                output_format=JudgeScores,
-            )
-            if response.parsed_output is not None:  # refusal/truncation -> retry
-                return response.parsed_output
+            if use_api:
+                response = client.messages.parse(
+                    model=JUDGE_MODEL,
+                    max_tokens=4000,
+                    thinking={"type": "adaptive"},
+                    output_config={"effort": "high"},
+                    system=_RUBRIC,
+                    messages=[{"role": "user", "content": user}],
+                    output_format=JudgeScores,
+                )
+                if response.parsed_output is not None:  # refusal/truncation -> retry
+                    return response.parsed_output
+            else:
+                text = llm.complete(JUDGE_MODEL, _RUBRIC + _JSON_ONLY, user, 4000)
+                return JudgeScores.model_validate(json.loads(_strip_fences(text)))
         except Exception:
             continue
     return None

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import anthropic
 
+from evals import llm
 from evals.scenario import Beat, Scenario
 
 PLAYER_MODEL = "claude-haiku-4-5"
@@ -42,13 +43,8 @@ def build_player_prompt(
 
 
 def next_player_message(
-    client: anthropic.Anthropic, scenario: Scenario, beat: Beat, narration: list[str]
+    client: anthropic.Anthropic | None, scenario: Scenario, beat: Beat, narration: list[str]
 ) -> str:
+    del client  # kept for signature stability; evals.llm resolves credentials itself
     system, user = build_player_prompt(scenario, beat, narration)
-    response = client.messages.create(
-        model=PLAYER_MODEL,
-        max_tokens=300,
-        system=system,
-        messages=[{"role": "user", "content": user}],
-    )
-    return next(b.text for b in response.content if b.type == "text").strip()
+    return llm.complete(PLAYER_MODEL, system, user, 300)

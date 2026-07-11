@@ -5,7 +5,7 @@
 # Hearthforge
 
 A solo D&D 5e campaign by the fire: Claude tells the story, a local rules
-engine rolls the dice.
+engine rolls the dice. Different every playthrough and you set the scene. 
 
 Hearthforge is engine-first. The `dm-engine` is the complete mechanical
 game — rules lookup (2014 rules / SRD 5.1), audited dice, and persistent

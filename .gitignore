@@ -9,3 +9,4 @@ campaigns/
 .coverage
 .hypothesis/
 .superpowers/
+evals/runs/

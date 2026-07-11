@@ -57,8 +57,11 @@ def compute_metrics(db_path: Path, transcript_path: Path, pc_name: str = "Kira")
     polling = sum(1 for _, cmd, _, _ in events if cmd in POLLING_COMMANDS)
     supplied_violations = 0
     for _, _, inputs, res in events:
-        actor = json.loads(inputs).get("actor") or json.loads(inputs).get("caster")
-        if actor and actor != pc_name and '"player_supplied": true' in res:
+        parsed_inputs = json.loads(inputs)
+        actor = parsed_inputs.get("actor") or parsed_inputs.get("caster")
+        rolls = json.loads(res).get("rolls") or []
+        supplied = any(isinstance(r, dict) and r.get("player_supplied") for r in rolls)
+        if actor and actor != pc_name and supplied:
             supplied_violations += 1
 
     player_messages = tool_calls = schema_rejections = 0

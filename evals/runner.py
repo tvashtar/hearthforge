@@ -123,16 +123,19 @@ async def run_cell(
 ) -> RunResult:
     slug = f"eval-{cell.slug}-{seed}"
     result = RunResult(cell=cell)
+    started = time.monotonic()
     bundle_dir.mkdir(parents=True, exist_ok=True)
     transcript = TranscriptWriter(bundle_dir / "transcript.jsonl")
-    build_campaign(scenario, campaigns_dir, rules_db_path, slug=slug, seed=seed)
     db_path = campaigns_dir / slug / "campaign.sqlite"
-    player = anthropic.Anthropic()
-    skill_text = (repo_root / SKILL_PATH).read_text()
-    beats = scenario.beats[:beats_limit] if beats_limit else scenario.beats
-    started = time.monotonic()
 
     try:
+        # everything fallible (missing API key, bad YAML, missing skill file)
+        # stays inside the try so failures land in result.error and the
+        # finally block still writes timing.json and cleans up.
+        build_campaign(scenario, campaigns_dir, rules_db_path, slug=slug, seed=seed)
+        player = anthropic.Anthropic()
+        skill_text = (repo_root / SKILL_PATH).read_text()
+        beats = scenario.beats[:beats_limit] if beats_limit is not None else scenario.beats
         options = dm_options(
             model=cell.model, effort=cell.effort, repo_root=repo_root, skill_text=skill_text
         )
@@ -181,5 +184,6 @@ async def run_cell(
         )
         if db_path.exists():
             shutil.copy2(db_path, bundle_dir / "campaign.sqlite")
+        if (campaigns_dir / slug).exists():
             shutil.rmtree(campaigns_dir / slug)  # live-data rule: no scratch slugs linger
     return result

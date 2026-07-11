@@ -70,6 +70,28 @@ slugs), `death_saves`
 The `characters` row is who you are; the `resources` row is how you're
 doing.
 
+### `active_effects` — timed mechanical riders on characters
+
+One row per live effect (mage armor, bless, cover), created by
+`dm_ruling`'s `apply_effect` op and removed by `end_effect`, rests,
+world-clock advancement, or the linked caster's concentration breaking.
+(`CREATE TABLE IF NOT EXISTS` runs on every store open, migrating
+pre-TVA-20 campaigns in place.)
+
+| Column | Notes |
+|---|---|
+| `character_id` | who the effect rides on (characters only, never monsters) |
+| `name` | display name (`"mage armor"`); `end_effect` matches it case-insensitively |
+| `source_event_id` | the `event_log` row of the ruling that created it |
+| `mechanics` | *JSON* — known keys only, validated at the door: `ac_override` (int, best one replaces base AC when higher), `ac_bonus` (int, stacks on top), `note` (str, tracking-only). Future mechanics (advantage riders, save bonuses) are new keys, no schema change |
+| `expires_day`, `expires_minutes` | absolute world-clock expiry (inclusive), or NULL for untimed |
+| `expires_on_rest` | `short` or `long` (a long rest also clears short-rest effects), or NULL |
+| `concentration` | 1 when sustained by concentration |
+| `caster_id` | whose concentration sustains it (defaults to `character_id`); breaking it deletes the row |
+
+Consultation (the `attack` / spell-attack AC path and the sheet renderer)
+filters clock-expired rows even before a cleanup hook deletes them.
+
 ### `inventory`
 
 One row per item stack per character: `name`, `quantity`, `equipped`,

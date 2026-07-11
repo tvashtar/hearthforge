@@ -139,6 +139,111 @@ def test_ruling_unknown_condition_refusal_lists_vocabulary(ctx):
     assert "prone" in result.refusal and "stunned" in result.refusal
 
 
+# -- apply_effect / end_effect ops -------------------------------------------
+
+
+def test_apply_effect_creates_a_tracked_effect(ctx):
+    kira = ctx.store.get_character("Kira")
+    result = registry.execute(
+        "dm_ruling", ctx, description="Mage armor on Kira",
+        rationale="tier-2 spell resolution",
+        effects=[{"op": "apply_effect", "target": "Kira", "name": "mage armor",
+                  "mechanics": {"ac_override": 15}, "duration_minutes": 480}],
+    )
+    assert result.ok, result.refusal
+    (effect,) = ctx.store.active_effects_for(kira["id"])
+    assert effect["name"] == "mage armor"
+    assert effect["mechanics"] == {"ac_override": 15}
+    # started at day 1, 480 minutes -> expires day 1, 960 minutes
+    assert (effect["expires_day"], effect["expires_minutes"]) == (1, 960)
+    assert effect["source_event_id"] == result.event_ids[0]
+    applied = result.data["applied"][0]
+    assert applied["op"] == "apply_effect" and applied["effect_id"] == effect["id"]
+
+
+def test_apply_effect_concentration_links_to_the_caster(ctx):
+    kira = ctx.store.get_character("Kira")
+    aldric = ctx.store.get_character("Brother Aldric")
+    result = registry.execute(
+        "dm_ruling", ctx, description="Bless on Kira",
+        rationale="tier-2 spell resolution",
+        effects=[{"op": "apply_effect", "target": "Kira", "name": "bless",
+                  "concentration": True, "concentration_by": "Brother Aldric"}],
+    )
+    assert result.ok, result.refusal
+    (effect,) = ctx.store.active_effects_for(kira["id"])
+    assert effect["concentration"] is True and effect["caster_id"] == aldric["id"]
+
+
+def test_end_effect_removes_a_named_effect(ctx):
+    kira = ctx.store.get_character("Kira")
+    registry.execute(
+        "dm_ruling", ctx, description="Mage armor", rationale="testing",
+        effects=[{"op": "apply_effect", "target": "Kira", "name": "mage armor",
+                  "mechanics": {"ac_override": 15}}],
+    )
+    result = registry.execute(
+        "dm_ruling", ctx, description="Dispelled", rationale="dispel magic",
+        effects=[{"op": "end_effect", "target": "Kira", "name": "Mage Armor"}],
+    )
+    assert result.ok, result.refusal
+    assert ctx.store.active_effects_for(kira["id"]) == []
+    assert result.data["applied"][0]["ended"] == 1
+
+
+def test_end_effect_refuses_when_no_such_effect(ctx):
+    result = registry.execute(
+        "dm_ruling", ctx, description="Dispelled", rationale="testing",
+        effects=[{"op": "end_effect", "target": "Kira", "name": "mage armor"}],
+    )
+    assert result.ok is False
+
+
+def test_apply_effect_refusals(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    goblin = next(c["key"] for c in ctx.store.combat()["combatants"]
+                  if c["kind"] == "monster")
+    cases = [
+        # monsters carry no tracked effects
+        {"op": "apply_effect", "target": goblin, "name": "mage armor"},
+        {"op": "apply_effect", "target": "Nobody", "name": "mage armor"},
+        {"op": "apply_effect", "target": "Kira", "name": "   "},
+        # unknown mechanic key must refuse, never silently no-op
+        {"op": "apply_effect", "target": "Kira", "name": "x",
+         "mechanics": {"advantage": True}},
+        {"op": "apply_effect", "target": "Kira", "name": "x",
+         "mechanics": {"ac_override": "15"}},
+        {"op": "apply_effect", "target": "Kira", "name": "x", "duration_minutes": 0},
+        {"op": "apply_effect", "target": "Kira", "name": "x",
+         "expires_on_rest": "nap"},
+        # concentration_by without concentration makes no sense
+        {"op": "apply_effect", "target": "Kira", "name": "x",
+         "concentration_by": "Brother Aldric"},
+        {"op": "apply_effect", "target": "Kira", "name": "x",
+         "concentration": True, "concentration_by": "Nobody"},
+    ]
+    for op in cases:
+        result = registry.execute("dm_ruling", ctx, description="bad",
+                                  rationale="testing", effects=[op])
+        assert result.ok is False, op
+
+
+def test_invalid_apply_effect_refuses_the_whole_batch(ctx):
+    kira = ctx.store.get_character("Kira")
+    result = registry.execute(
+        "dm_ruling", ctx, description="Batch", rationale="testing",
+        effects=[{"op": "apply_effect", "target": "Kira", "name": "mage armor",
+                  "mechanics": {"ac_override": 15}},
+                 {"op": "apply_effect", "target": "Kira", "name": "bad",
+                  "mechanics": {"advantage": True}}],
+    )
+    assert result.ok is False
+    assert ctx.store.active_effects_for(kira["id"]) == []
+
+
+
 # -- roll_dice ---------------------------------------------------------------
 
 

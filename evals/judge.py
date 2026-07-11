@@ -69,7 +69,8 @@ def judge_transcript(
                 messages=[{"role": "user", "content": user}],
                 output_format=JudgeScores,
             )
-            return response.parsed_output
+            if response.parsed_output is not None:  # refusal/truncation -> retry
+                return response.parsed_output
         except Exception:
             continue
     return None

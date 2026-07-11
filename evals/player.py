@@ -31,7 +31,7 @@ def build_player_prompt(
     total = 0
     for chunk in reversed(narration):
         total += len(chunk)
-        if total > MAX_NARRATION_CHARS:
+        if total > MAX_NARRATION_CHARS and tail:  # always keep the newest chunk
             break
         tail.append(chunk)
     text = "\n\n".join(reversed(tail)) or "(the session is just beginning)"

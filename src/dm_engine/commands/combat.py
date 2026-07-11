@@ -234,6 +234,31 @@ def start_combat(
     )
 
 
+def _combat_snapshot(ctx: CommandContext, combat: dict) -> dict:
+    """Compact live-combat snapshot shared by `next_turn` and
+    `get_scene_state`: the initiative order with characters' HP/max
+    HP/conditions merged live from their tables, plus every combatant's
+    budget keyed by combatant."""
+    order = []
+    budgets = {}
+    for c in combat["combatants"]:
+        dump = dict(c)
+        if c["kind"] == "character":
+            res = ctx.store.get_resources(c["character_id"])
+            dump["hp"] = res["hp"]
+            dump["max_hp"] = ctx.store.get_character_by_id(c["character_id"])["max_hp"]
+            dump["conditions"] = res["conditions"]
+        order.append(dump)
+        budgets[c["key"]] = c["budget"]
+    return {
+        "round": combat["round"],
+        "turn_index": combat["turn_index"],
+        "active": combat["combatants"][combat["turn_index"]]["key"],
+        "order": order,
+        "budgets": budgets,
+    }
+
+
 @command("next_turn")
 def next_turn(ctx: CommandContext, **kwargs) -> CommandResult:
     combat = ctx.store.combat()
@@ -265,11 +290,13 @@ def next_turn(ctx: CommandContext, **kwargs) -> CommandResult:
         actor["budget"] = _budget_for(ctx, actor, _base_speed(ctx, actor))
 
     ctx.store.update_combat(combatants=combatants, turn_index=idx, round=rnd)
+    snapshot = _combat_snapshot(
+        ctx, {"combatants": combatants, "round": rnd, "turn_index": idx}
+    )
     digest = f"Round {rnd} — {actor['key']}'s turn"
     return CommandResult(
         ok=True, command="next_turn", digest=digest,
-        data={"round": rnd, "active": actor["key"], "kind": actor["kind"],
-              "budget": actor["budget"]},
+        data={**snapshot, "kind": actor["kind"], "budget": actor["budget"]},
     )
 
 
@@ -315,7 +342,22 @@ def move(
     cost = movement_cost_ft(from_band, to_band)
     result = spend_movement(budget, cost)
     if not result.ok:
-        return refuse("move", result.reason)
+        # TVA-27: state the price of the asked-for transition and which
+        # bands the remaining budget can still buy, not just the budget.
+        remaining = budget.movement_remaining
+        reachable = [
+            b for b in BAND_ORDER
+            if b != from_band and movement_cost_ft(from_band, b) <= remaining
+        ]
+        detail = (
+            f"reachable this turn: {', '.join(reachable)}"
+            if reachable else "no band change reachable this turn"
+        )
+        return refuse(
+            "move",
+            f"{from_band}→{to_band} costs {cost} ft; only {remaining} ft of "
+            f"movement remaining ({detail})",
+        )
     budget = result.budget
 
     engaged_with = list(actor["engaged_with"])
@@ -431,26 +473,7 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
         location = ctx.store.get_location(clock["location_slug"])
 
     combat = ctx.store.combat()
-    combat_payload = None
-    if combat["active"]:
-        order = []
-        budgets = {}
-        for c in combat["combatants"]:
-            dump = dict(c)
-            if c["kind"] == "character":
-                res = ctx.store.get_resources(c["character_id"])
-                dump["hp"] = res["hp"]
-                dump["max_hp"] = ctx.store.get_character_by_id(c["character_id"])["max_hp"]
-                dump["conditions"] = res["conditions"]
-            order.append(dump)
-            budgets[c["key"]] = c["budget"]
-        combat_payload = {
-            "round": combat["round"],
-            "turn_index": combat["turn_index"],
-            "active": combat["combatants"][combat["turn_index"]]["key"],
-            "order": order,
-            "budgets": budgets,
-        }
+    combat_payload = _combat_snapshot(ctx, combat) if combat["active"] else None
 
     npcs_present = []
     if clock.get("location_slug"):

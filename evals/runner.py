@@ -182,8 +182,11 @@ async def run_cell(
                 indent=2,
             )
         )
-        if db_path.exists():
-            shutil.copy2(db_path, bundle_dir / "campaign.sqlite")
-        if (campaigns_dir / slug).exists():
-            shutil.rmtree(campaigns_dir / slug)  # live-data rule: no scratch slugs linger
+        try:
+            if db_path.exists():
+                shutil.copy2(db_path, bundle_dir / "campaign.sqlite")
+            if (campaigns_dir / slug).exists():
+                shutil.rmtree(campaigns_dir / slug)  # live-data rule: no scratch lingers
+        except OSError as exc:  # a failed copy must not sink the matrix run
+            result.error = result.error or f"bundle cleanup failed: {exc}"
     return result

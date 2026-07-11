@@ -48,6 +48,7 @@ def sheet(
     campaigns_dir: Path = typer.Option(
         REPO_ROOT / "campaigns", help="Directory holding campaign folders"
     ),
+    db: Path = typer.Option(DEFAULT_DB, help="Path to rules.sqlite"),
 ) -> None:
     """Print a character's rendered markdown sheet (read-only, no snapshot)."""
     root = campaigns_dir / campaign
@@ -61,7 +62,8 @@ def sheet(
         if char is None:
             typer.echo(f"no character named {character!r} in campaign {campaign!r}", err=True)
             raise typer.Exit(code=1)
-        typer.echo(render_character_sheet(store, char["id"]))
+        with RulesDB(ensure_rules_db(db)) as rules:
+            typer.echo(render_character_sheet(store, char["id"], rules))
     finally:
         store.close()
 
@@ -153,6 +155,17 @@ def lookup_spell(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
         typer.echo(f"no spell with slug {slug!r}", err=True)
         raise typer.Exit(code=1)
     typer.echo(json.dumps(spell.model_dump(by_alias=True), indent=2))
+
+
+@lookup_app.command("feature")
+def lookup_feature(slug: str, db: Path = typer.Option(DEFAULT_DB)) -> None:
+    """Print a class feature's full record by slug (e.g. 'cunning-action')."""
+    with RulesDB(ensure_rules_db(db)) as rules:
+        feature = rules.get_feature(slug)
+    if feature is None:
+        typer.echo(f"no feature with slug {slug!r}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(json.dumps(feature, indent=2))
 
 
 @app.command()

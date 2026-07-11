@@ -3,8 +3,8 @@
 These never mutate campaign state; they exist so the MCP/CLI surface can
 query the seeded SRD database (`ctx.rules`) through the same envelope as
 every other command, with an event row for traceability. `lookup_rule`
-never refuses (an empty hit list is still `ok=True`); `lookup_monster` and
-`lookup_spell` refuse on an unknown slug.
+never refuses (an empty hit list is still `ok=True`); `lookup_monster`,
+`lookup_spell`, and `lookup_feature` refuse on an unknown slug.
 """
 
 from __future__ import annotations
@@ -40,6 +40,17 @@ def lookup_monster(ctx: CommandContext, slug: str, **kwargs) -> CommandResult:
     return CommandResult(
         ok=True, command="lookup_monster",
         digest=f"Monster: {data.get('name', slug)}", data=data, gm_only=True,
+    )
+
+
+@command("lookup_feature")
+def lookup_feature(ctx: CommandContext, slug: str, **kwargs) -> CommandResult:
+    record = ctx.rules.get_feature(slug)
+    if record is None:
+        return refuse("lookup_feature", f"no feature with slug {slug!r}")
+    return CommandResult(
+        ok=True, command="lookup_feature",
+        digest=f"Feature: {record.get('name', slug)}", data=record,
     )
 
 

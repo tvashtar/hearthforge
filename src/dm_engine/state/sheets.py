@@ -1,10 +1,11 @@
 """Materialized markdown character sheets (Task 5).
 
 `render_character_sheet` produces a stable, player-visible markdown sheet
-from store state alone (no rules DB); the registry's post-command hook calls
-`write_party_sheets` to materialize one file per party member after every
-successful mutation. There is no `gm_only` material in these tables, so
-everything stored is rendered.
+from store state plus static reference data from the rules DB (class
+features by class/level, per-spell metadata); the registry's post-command
+hook calls `write_party_sheets` to materialize one file per party member
+after every successful mutation. There is no `gm_only` material in these
+tables, so everything stored is rendered.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
+from dm_engine.content.lookup import RulesDB
 from dm_engine.models.character import SKILL_ABILITIES, AttackSpec
 from dm_engine.rules.character_build import (
     attack_damage_mod,
@@ -35,7 +37,41 @@ def _fmt_mod(value: int) -> str:
     return f"+{value}" if value >= 0 else str(value)
 
 
-def render_character_sheet(store: CampaignStore, character_id: int) -> str:
+def _one_line_description(description: str) -> str:
+    """First paragraph of a feature description — the reminder line on the
+    sheet; full text stays a `lookup_feature` / `dm lookup feature` away."""
+    return description.split("\n", 1)[0].strip()
+
+
+def _feature_dice_annotation(feature_slug: str, class_specific: dict) -> str:
+    """Level-scaled dice for features the SRD tracks per level in the class
+    table (e.g. Sneak Attack 1d6, Martial Arts 1d4)."""
+    spec = class_specific.get(feature_slug.replace("-", "_"))
+    if isinstance(spec, dict) and "dice_count" in spec and "dice_value" in spec:
+        return f" ({spec['dice_count']}d{spec['dice_value']})"
+    return ""
+
+
+def _spell_line(rules: RulesDB, slug: str) -> str:
+    """`Name — level, components[, ritual][, concentration]`; unknown slugs
+    (homebrew spells the rules DB can't resolve) render bare."""
+    record = rules.get_spell(slug)
+    if record is None:
+        return slug
+    parts = ["cantrip" if record.level == 0 else f"L{record.level}"]
+    components = getattr(record, "components", None)
+    if components:
+        parts.append("/".join(components))
+    if record.ritual:
+        parts.append("ritual")
+    if record.concentration:
+        parts.append("concentration")
+    return f"{record.name} — {', '.join(parts)}"
+
+
+def render_character_sheet(
+    store: CampaignStore, character_id: int, rules: RulesDB
+) -> str:
     char = store.get_character_by_id(character_id)
     if char is None:
         raise KeyError(f"no character with id {character_id}")
@@ -201,12 +237,29 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
         lines.append("- none")
     lines.append("")
 
-    # Spells known
+    # Class features — derived from class + level, so a level-up re-render
+    # picks up new features with no per-character bookkeeping.
+    features = rules.class_features(char["class_slug"], level)
+    if features:
+        class_level = rules.get_class_level(char["class_slug"], level) or {}
+        class_specific = class_level.get("class_specific", {})
+        lines.append("## Features")
+        for feat in features:
+            annot = _feature_dice_annotation(feat.slug, class_specific)
+            entry = f"- {feat.name}{annot}"
+            one_liner = _one_line_description(feat.description)
+            if one_liner:
+                entry += f" — {one_liner}"
+            lines.append(entry)
+        lines.append("")
+
+    # Spells known — annotated from the rules DB (level, V/S/M components,
+    # ritual/concentration); full text stays a `lookup_spell` away.
     spells = char["spells_known"]
     if spells:
         lines.append("## Spells Known")
         for spell in spells:
-            lines.append(f"- {spell}")
+            lines.append(f"- {_spell_line(rules, spell)}")
         lines.append("")
 
     # Inventory
@@ -229,12 +282,12 @@ def render_character_sheet(store: CampaignStore, character_id: int) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
-def write_party_sheets(store: CampaignStore) -> list[Path]:
+def write_party_sheets(store: CampaignStore, rules: RulesDB) -> list[Path]:
     sheets_dir = store.root / "sheets"
     sheets_dir.mkdir(parents=True, exist_ok=True)
     written: list[Path] = []
     for char in store.party():
         path = sheets_dir / _sheet_filename(char["name"])
-        path.write_text(render_character_sheet(store, char["id"]))
+        path.write_text(render_character_sheet(store, char["id"], rules))
         written.append(path)
     return written

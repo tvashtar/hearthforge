@@ -39,6 +39,18 @@ def test_seed_row_counts(rules_db):
     assert counts["features"] > 300
 
 
+def test_features_typed_columns_include_description(rules_db):
+    with closing(sqlite3.connect(rules_db)) as conn:
+        row = conn.execute(
+            "SELECT class_slug, level, description FROM features WHERE slug='cunning-action'"
+        ).fetchone()
+    assert row is not None
+    class_slug, level, description = row
+    assert class_slug == "rogue"
+    assert level == 2
+    assert "bonus action" in description.lower()
+
+
 def test_monster_typed_columns(rules_db):
     with closing(sqlite3.connect(rules_db)) as conn:
         row = conn.execute(

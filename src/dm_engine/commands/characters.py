@@ -77,7 +77,7 @@ def _sheet_payload(ctx: CommandContext, character_id: int) -> dict:
         "character": char,
         "resources": ctx.store.get_resources(character_id),
         "inventory": ctx.store.items_for(character_id),
-        "markdown": render_character_sheet(ctx.store, character_id),
+        "markdown": render_character_sheet(ctx.store, character_id, ctx.rules),
     }
 
 

@@ -36,6 +36,14 @@ class SpellSummary:
     school: str
 
 
+@dataclass
+class FeatureSummary:
+    slug: str
+    name: str
+    level: int
+    description: str
+
+
 class RulesDB:
     def __init__(self, path: Path = DEFAULT_DB):
         if not Path(path).exists():
@@ -107,6 +115,29 @@ class RulesDB:
             (*params, limit),
         ).fetchall()
         return [SpellSummary(*row) for row in rows]
+
+    def get_feature(self, slug: str) -> dict | None:
+        row = self._conn.execute(
+            "SELECT data FROM features WHERE slug=?", (slug,)
+        ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def class_features(self, class_slug: str, level: int) -> list[FeatureSummary]:
+        """Base class features gained at or below `level`, in level order.
+
+        Subclass features and choice sub-options (records with a `parent`,
+        e.g. the individual Fighting Style picks) are excluded — those are
+        character-specific selections, not class-wide grants.
+        """
+        rows = self._conn.execute(
+            "SELECT slug, name, level, description FROM features"
+            " WHERE class_slug=? AND level<=?"
+            " AND json_extract(data, '$.subclass') IS NULL"
+            " AND json_extract(data, '$.parent') IS NULL"
+            " ORDER BY level, name",
+            (class_slug, level),
+        ).fetchall()
+        return [FeatureSummary(*row) for row in rows]
 
     def get_class(self, class_slug: str) -> dict | None:
         """Return a class record incl. its `hit_die` (from the dedicated

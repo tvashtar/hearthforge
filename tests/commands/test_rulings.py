@@ -178,6 +178,30 @@ def test_adjust_hp_breaks_concentration_on_knockout(ctx, party):
     assert result.data["applied"][0]["concentration_broken"] is True
 
 
+def test_adjust_hp_zero_delta_is_noop_on_dying(ctx, party):
+    # TVA-53: a zero delta must stay a no-op. Routing it through _apply_healing
+    # (whose hp==0 revive branch ignores amount) would drop unconscious and
+    # reset death saves — reviving a dying character for a heal of nothing.
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 1, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="Nothing happens to Kira",
+        rationale="zero-delta no-op",
+        effects=[{"op": "adjust_hp", "target": "Kira", "delta": 0}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert "unconscious" in res["conditions"]
+    assert res["death_saves"] == {
+        "successes": 0, "failures": 1, "stable": False, "dead": False,
+    }
+
+
 def test_adjust_hp_heal_refuses_hardcore_dead(ctx, party):
     # TVA-53: routing heals through _apply_healing would otherwise revive a
     # hardcore-dead PC (reset death_saves.dead, drop unconscious, un-defeat)

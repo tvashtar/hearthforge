@@ -325,6 +325,14 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
             ctx.store.update_combat(combatants=combatants)
             return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
 
+        # A zero delta is a no-op: never route it through the heal helper,
+        # whose revive branch fires on hp==0 regardless of amount and would
+        # otherwise resurrect a dying character (drop unconscious, reset death
+        # saves) for a heal of nothing.
+        if delta == 0:
+            hp = ctx.store.get_resources(char["id"])["hp"]
+            return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
+
         # Route through the real transition helpers so crossing 0 HP behaves
         # exactly like damage/healing (unconscious, dying state, death saves,
         # concentration, combatant flag). Local imports dodge module cycles.

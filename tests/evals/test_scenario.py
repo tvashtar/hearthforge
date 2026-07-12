@@ -14,7 +14,10 @@ def test_load_scenario_parses_beats_in_order():
     sc = load_scenario(SCENARIO)
     assert sc.pc_name == "Kira"
     assert [b.id for b in sc.beats][:2] == ["question-innkeeper", "buy-supplies"]
-    assert sc.beats[7].done_when == {"command": "attack", "ok": False}
+    assert sc.beats[5].id == "illegal-action"
+    assert sc.beats[5].done_when == {
+        "command": "attack", "ok": False, "refusal_contains": "cannot reach",
+    }
     assert all(b.max_player_messages > 0 for b in sc.beats)
 
 
@@ -43,3 +46,30 @@ def test_build_campaign_raises_on_create_character_refusal(tmp_path, rules_path)
     bad_sc = replace(sc, party=[sc.party[0], bad_member])
     with pytest.raises(RuntimeError, match="not-a-real-spell"):
         build_campaign(bad_sc, tmp_path, rules_path, slug="eval-bad", seed=1234)
+
+
+def test_build_campaign_seeds_party_items(tmp_path, rules_path):
+    sc = load_scenario(SCENARIO)
+    kira_with_items = {**sc.party[0], "items": [{"item": "gold pieces", "quantity": 60}]}
+    sc_with_items = replace(sc, party=[kira_with_items, sc.party[1]])
+    build_campaign(sc_with_items, tmp_path, rules_path, slug="eval-items", seed=1234)
+    db = sqlite3.connect(tmp_path / "eval-items" / "campaign.sqlite")
+    cid = db.execute("SELECT id FROM characters WHERE name = 'Kira'").fetchone()[0]
+    row = db.execute(
+        "SELECT quantity FROM inventory WHERE character_id = ? AND name = 'gold pieces'",
+        (cid,),
+    ).fetchone()
+    assert row is not None
+    assert row[0] == 60
+    add_item_events = db.execute(
+        "SELECT COUNT(*) FROM event_log WHERE command = 'add_item'"
+    ).fetchone()[0]
+    assert add_item_events == 1
+
+
+def test_build_campaign_raises_on_add_item_refusal(tmp_path, rules_path):
+    sc = load_scenario(SCENARIO)
+    bad_member = {**sc.party[0], "items": [{"item": "gold pieces", "quantity": 0}]}
+    bad_sc = replace(sc, party=[bad_member, sc.party[1]])
+    with pytest.raises(RuntimeError, match="add_item failed"):
+        build_campaign(bad_sc, tmp_path, rules_path, slug="eval-bad-item", seed=1234)

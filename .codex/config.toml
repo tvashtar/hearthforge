@@ -1,0 +1,5 @@
+# Hearthforge's local game engine MCP server.
+# Codex loads this project-scoped configuration when the repository is trusted.
+[mcp_servers.dm-engine]
+command = "uv"
+args = ["run", "dm", "mcp"]

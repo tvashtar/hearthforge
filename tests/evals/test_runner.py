@@ -13,7 +13,15 @@ from claude_agent_sdk import (
 
 from dm_engine.commands import registry
 from evals.cells import Cell
-from evals.runner import MAX_HANDSHAKE_ATTEMPTS, RunResult, TranscriptWriter, _dm_turn, dm_options, run_cell
+from evals.runner import (
+    MAX_HANDSHAKE_ATTEMPTS,
+    RunResult,
+    TranscriptWriter,
+    _dm_turn,
+    _wait_for_mcp_ready,
+    dm_options,
+    run_cell,
+)
 from evals.scenario import Scenario
 
 
@@ -93,6 +101,63 @@ def test_dm_turn_records_successful_tool_results(tmp_path):
     assert result.turns[0]["usage"] == {"output_tokens": 5}
 
 
+# --- MCP readiness gate: the opening prompt must not race tool registration ---
+# (Observed in the 20260712-022855 matrix: first API requests went out with no
+# dm-engine tools, so the DM narrated pseudo tool calls as text and two cells
+# burned all handshake attempts in <8s.)
+
+
+def _mcp_status(status: str, *, tools: bool = True, error: str | None = None) -> dict:
+    server: dict = {"name": "dm-engine", "status": status}
+    if tools:
+        server["tools"] = [{"name": "mcp__dm-engine__open_campaign"}]
+    if error:
+        server["error"] = error
+    return {"mcpServers": [server]}
+
+
+class _StatusClient:
+    """Yields one canned get_mcp_status response per call (last one repeats)."""
+
+    def __init__(self, statuses: list[dict]):
+        self._statuses = statuses
+        self.status_calls = 0
+
+    async def get_mcp_status(self):
+        self.status_calls += 1
+        i = min(self.status_calls - 1, len(self._statuses) - 1)
+        return self._statuses[i]
+
+
+def test_wait_for_mcp_ready_polls_until_tools_are_registered():
+    client = _StatusClient(
+        [_mcp_status("pending", tools=False), _mcp_status("connected", tools=False),
+         _mcp_status("connected")]
+    )
+    asyncio.run(_wait_for_mcp_ready(client, poll_interval_s=0))
+    assert client.status_calls == 3  # pending, connected-but-toolless, ready
+
+
+def test_wait_for_mcp_ready_raises_on_server_failure():
+    client = _StatusClient([_mcp_status("failed", tools=False, error="uv exploded")])
+    try:
+        asyncio.run(_wait_for_mcp_ready(client, poll_interval_s=0))
+    except RuntimeError as exc:
+        assert "uv exploded" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError for failed MCP server")
+
+
+def test_wait_for_mcp_ready_raises_on_timeout():
+    client = _StatusClient([_mcp_status("pending", tools=False)])
+    try:
+        asyncio.run(_wait_for_mcp_ready(client, timeout_s=0, poll_interval_s=0))
+    except RuntimeError as exc:
+        assert "not ready" in str(exc)
+    else:
+        raise AssertionError("expected RuntimeError on readiness timeout")
+
+
 # --- TVA-45: opening handshake, driven against a real synthetic campaign DB ---
 
 
@@ -116,6 +181,7 @@ class _FakeSDKClient:
 
     def __init__(self, options=None, *, on_query=None):
         self.calls = 0
+        self.events: list[str] = []  # interleaving of status polls and queries
         self._on_query = on_query or (lambda n: None)
 
     async def __aenter__(self):
@@ -124,8 +190,13 @@ class _FakeSDKClient:
     async def __aexit__(self, *exc):
         return False
 
+    async def get_mcp_status(self):
+        self.events.append("status")
+        return _mcp_status("connected")
+
     async def query(self, prompt):
         self.calls += 1
+        self.events.append("query")
         self._on_query(self.calls)
 
     async def receive_response(self):
@@ -159,6 +230,8 @@ def test_handshake_failure_aborts_before_any_beats(monkeypatch, tmp_path, rules_
     assert result.beats_completed == [] and result.beats_failed == []
     # opening turn + (MAX_HANDSHAKE_ATTEMPTS - 1) nudges, never more
     assert client_holder["client"].calls == MAX_HANDSHAKE_ATTEMPTS
+    # the readiness gate must run before the opening prompt is ever sent
+    assert client_holder["client"].events[0] == "status"
     timing = json.loads((tmp_path / "bundle" / "timing.json").read_text())
     assert timing["error"] == "handshake failed"
 

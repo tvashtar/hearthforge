@@ -37,6 +37,43 @@ SKILL_PATH = Path(".claude/skills/dm-session/SKILL.md")
 # skill/prompt.
 MAX_HANDSHAKE_ATTEMPTS = 3  # opening turn + up to 2 nudges
 
+# The CLI registers MCP tools asynchronously after the client connects, so a
+# query sent immediately can reach the API with no dm-engine tools at all.
+# Observed in the 20260712-022855 matrix: every cell's first request went out
+# toolless (~8-11k input tokens vs ~48k with tools) — models fabricated
+# openings or wrote pseudo tool calls as text, and two cells burned all
+# handshake attempts in <8s before the tools ever landed.
+MCP_READY_TIMEOUT_S = 120.0
+MCP_READY_POLL_S = 0.25
+
+
+async def _wait_for_mcp_ready(
+    client: ClaudeSDKClient,
+    server_name: str = "dm-engine",
+    *,
+    timeout_s: float = MCP_READY_TIMEOUT_S,
+    poll_interval_s: float = MCP_READY_POLL_S,
+) -> None:
+    """Block until the MCP server is connected AND its tools are registered."""
+    deadline = time.monotonic() + timeout_s
+    while True:
+        status = await client.get_mcp_status()
+        servers = {s.get("name"): s for s in status.get("mcpServers", [])}
+        server = servers.get(server_name)
+        if server is not None:
+            if server.get("status") == "failed":
+                raise RuntimeError(
+                    f"MCP server {server_name!r} failed to start: {server.get('error')}"
+                )
+            if server.get("status") == "connected" and server.get("tools"):
+                return
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"MCP server {server_name!r} not ready after {timeout_s}s "
+                f"(status: {server and server.get('status')})"
+            )
+        await asyncio.sleep(poll_interval_s)
+
 
 def _handshake_nudge(slug: str) -> str:
     return (
@@ -159,6 +196,7 @@ async def run_cell(
             model=cell.model, effort=cell.effort, repo_root=repo_root, skill_text=skill_text
         )
         async with ClaudeSDKClient(options=options) as client:
+            await _wait_for_mcp_ready(client)
             narration = await asyncio.wait_for(
                 _dm_turn(
                     client,

@@ -208,6 +208,67 @@ def test_saving_throw_gm_only_flags_event(ctx):
     assert '"gm_only": true' in row["rolls"]
 
 
+# -- own tests: monster saving_throw (TVA-56) --------------------------------
+
+def test_monster_saving_throw_in_combat(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "bandit", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    before = ctx.store.event_count()
+    result = registry.execute("saving_throw", ctx, character="bandit-1",
+                              ability="wis", dc=12, gm_only=True)
+    assert result.ok, result.refusal
+    # bandit WIS 10 -> +0, no save proficiency in the SRD record
+    assert result.data["modifier"] == ability_modifier(10) == 0
+    assert {"natural", "total", "success", "margin"} <= set(result.data)
+    assert ctx.store.event_count() == before + 1  # the die went through the engine
+
+
+def test_monster_save_uses_srd_save_proficiency(ctx):
+    # flying-sword (CR 1/4) carries an explicit SRD saving-throw-dex
+    # proficiency of +4, which is NOT the same as its bare DEX modifier
+    # (DEX 15 -> +2) — proves the proficiency branch, not just the fallback.
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "flying-sword", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("saving_throw", ctx, character="flying-sword-1",
+                              ability="dex", dc=12, gm_only=True)
+    assert result.ok, result.refusal
+    assert result.data["modifier"] == 4
+    assert result.data["modifier"] != ability_modifier(15)
+
+
+def test_monster_save_refuses_player_value(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "bandit", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("saving_throw", ctx, character="bandit-1",
+                              ability="wis", dc=12, player_value=15)
+    assert result.ok is False
+    assert "player_value" in result.refusal
+    assert result.data == {}  # refused before any engine roll — no natural/total leaked
+
+
+def test_saving_throw_still_refuses_unknown_name_with_active_combat(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "bandit", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("saving_throw", ctx, character="Nobody",
+                              ability="wis", dc=12)
+    assert result.ok is False and "nobody" in result.refusal.lower()
+
+
+def test_saving_throw_ambiguous_display_name_refused(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 2, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute("saving_throw", ctx, character="Goblin",
+                              ability="wis", dc=12)
+    assert result.ok is False
+    assert "goblin-1" in result.refusal and "goblin-2" in result.refusal
+    assert "multiple" in result.refusal.lower()
+
+
 # -- own tests: death_save ----------------------------------------------------
 
 def test_death_save_refused_when_not_dying(ctx):

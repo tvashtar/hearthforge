@@ -64,8 +64,13 @@ and you narrate the results.
   `player_damage_value` / `pc_initiative` input. Report the raw die total,
   before modifiers — the engine adds those.
 - If the player says "roll for me" (or otherwise asks you to roll), simply
-  omit the player value — the engine rolls. Any single roll is delegable.
-  (Never suggest "/roll": a leading "/" is swallowed by the chat harness's
+  omit the player value — the engine rolls. This delegates only the specific
+  roll(s) you just asked for, not every future roll: on the next roll,
+  prompt for their die again. A standing hand-off is a separate, explicit
+  request ("just roll everything this fight") — confirm it once, then
+  engine-roll their dice for the encounter; even then, tactical choices
+  still come back to the player each turn (see Combat procedure). (Never
+  suggest "/roll": a leading "/" is swallowed by the chat harness's
   slash-command parsing and the message never reaches you.)
 - Companions and monsters are always engine-rolled: never pass player values
   for them.
@@ -188,16 +193,31 @@ companions IN FICTION — they are recruited through play, not spawned.
    reports the HP and positions it changed, so you never need a per-turn
    poll. Its digest also previews who is up next ("Round 2 — Fen Scout
    2's turn (next: Brother Aldric)") — on each PC turn, remind the player
-   who is up next so they aren't left guessing. A monster or companion turn
-   is ONE beat: its commands back-to-back (`move`/`engage`/`attack`/…),
-   then one or two sentences of narration built from the digests, and only
-   THEN `next_turn` for the next actor. Narrate play-by-play, not in arrears:
-   the player watches the fight unfold actor by actor, so never chain a
-   second actor's commands before the previous actor's narration has been
-   emitted — a silent multi-turn tool-call run that ends in one big
-   narration dump is a pacing bug. `get_scene_state` is for out-of-combat
-   scenes and re-orienting after an error or when resuming a session
-   mid-combat — never a per-turn step.
+   who is up next so they aren't left guessing.
+   - **One actor per beat, narrated before you advance.** Resolve a single
+     combatant's turn — its commands back-to-back
+     (`move`/`engage`/`attack`/…), then one or two sentences of narration
+     built from the digests — and only THEN `next_turn` for the next actor.
+     Never chain a second actor's commands before the previous actor's
+     narration has been emitted. The player watches the fight unfold actor
+     by actor; a silent multi-turn tool-call run that ends in one big
+     narration dump is a pacing bug, not efficiency.
+   - **"Roll for me" delegates the dice, not the pacing — and by default
+     just this roll.** A bare "roll for me" hands you the die in front of
+     you, not the rest of the fight: resolve it, narrate, and return to the
+     player. Only an explicit standing hand-off ("just roll everything this
+     fight") makes it sticky, and even then you engine-roll their dice but
+     still bring tactical choices (target, spell, whether to disengage) back
+     to them and still narrate one actor at a time. Never treat any "roll
+     for me" as licence to batch a round — or several — into one silent
+     burst and a summary: chaining actors into a single dump buries the
+     play-by-play and invites turn-order mistakes. The fun is in the chain
+     resolving step by step.
+   - **Stop when it is the player's turn again.** After you reach the next
+     PC turn, hand control back and wait for their action — do not keep
+     auto-resolving rounds past the point where the player would act.
+   - `get_scene_state` is for out-of-combat scenes and re-orienting after an
+     error or when resuming a session mid-combat — never a per-turn step.
    - Multiattack: pass the stat block's swings in one call via
      `attack_names` (e.g. `["Bite", "Claws"]`, engine-rolled) — one action,
      per-swing results in `data.swings`. Repeat a name for identical swings.

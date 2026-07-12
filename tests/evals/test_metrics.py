@@ -241,3 +241,105 @@ def test_classify_beat_failure_refused(party):
     )
     assert detail["reason"] == "refused"
     assert detail["refusal"]  # most-recent refusal string is surfaced
+
+
+# --- TVA-65: dual-path illegal-action scoring (any_of + none_of abstention) ---
+
+# Mirrors the illegal-action beat's done_when in caravan_ambush.yaml.
+ILLEGAL_DONE_WHEN = {
+    "any_of": [
+        {"command": "attack", "ok": False, "refusal_contains": "cannot reach"},
+        {"none_of": [
+            {"command": "attack", "ok": True, "inputs": {"attacker": "Kira"}},
+            {"command": "engage", "inputs": {"combatant": "Kira"}},
+            {"command": "move", "inputs": {"combatant": "Kira"}},
+        ]},
+    ]
+}
+
+
+def _max_id(ctx) -> int:
+    return ctx.store.conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM event_log"
+    ).fetchone()[0]
+
+
+def _give_kira_full_turn(ctx) -> list[dict]:
+    """Point the initiative at Kira with a fresh budget; return combatants."""
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "Kira":
+            c["budget"] = {"speed": 30, "movement_remaining": 30,
+                           "action_available": True, "bonus_action_available": True,
+                           "reaction_available": True}
+    kira_idx = next(i for i, c in enumerate(combatants) if c["key"] == "Kira")
+    ctx.store.update_combat(combatants=combatants, turn_index=kira_idx)
+    ctx.store.conn.commit()
+    return combatants
+
+
+def test_illegal_action_passes_on_engine_refusal(party):
+    # Path 1: the DM submits the swing and the engine refuses "cannot reach".
+    ctx = party
+    marker = _max_id(ctx)
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "far"}],
+                     pc_initiative=15)
+    _give_kira_full_turn(ctx)
+    out = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                           attack_name="longsword")
+    assert not out.ok and "cannot reach" in out.refusal
+    db_path = ctx.store.root / "campaign.sqlite"
+    assert beat_done(db_path, ILLEGAL_DONE_WHEN, after_id=marker)
+
+
+def test_illegal_action_passes_on_narration_refusal(party):
+    # Path 2: the DM correctly declines in narration — Kira never attacks,
+    # engages, or moves — so there is no tool call, and abstention holds.
+    ctx = party
+    marker = _max_id(ctx)
+    db_path = ctx.store.root / "campaign.sqlite"
+    assert beat_done(db_path, ILLEGAL_DONE_WHEN, after_id=marker)
+
+
+def test_illegal_action_fails_on_workaround(party):
+    # A workaround — Kira engages to close the distance — trips none_of, and
+    # with no "cannot reach" refusal the beat fails.
+    ctx = party
+    marker = _max_id(ctx)
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _give_kira_full_turn(ctx)
+    eng = registry.execute("engage", ctx, combatant="Kira", target="goblin-1")
+    assert eng.ok, eng.refusal
+    db_path = ctx.store.root / "campaign.sqlite"
+    assert not beat_done(db_path, ILLEGAL_DONE_WHEN, after_id=marker)
+    detail = classify_beat_failure(db_path, ILLEGAL_DONE_WHEN, after_id=marker)
+    assert isinstance(detail["reason"], str)  # triages without crashing on any_of
+
+
+def test_illegal_action_fails_on_fabricated_hit(party):
+    # A successful swing resolved for Kira (a fabricated hit on the far
+    # target) also trips none_of via the attack clause.
+    ctx = party
+    marker = _max_id(ctx)
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    combatants = _give_kira_full_turn(ctx)
+    # Put the goblin in melee reach so the swing resolves without an engage
+    # command (the attack itself is the illegal-action-window event).
+    for c in combatants:
+        if c["key"] == "goblin-1":
+            c["band"] = "engaged"
+            c["engaged_with"] = ["Kira"]
+        if c["key"] == "Kira":
+            c["engaged_with"] = ["goblin-1"]
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    hit = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                           attack_name="longsword", player_attack_value=20)
+    assert hit.ok, hit.refusal
+    db_path = ctx.store.root / "campaign.sqlite"
+    assert not beat_done(db_path, ILLEGAL_DONE_WHEN, after_id=marker)

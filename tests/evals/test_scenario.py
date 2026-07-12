@@ -15,10 +15,19 @@ def test_load_scenario_parses_beats_in_order():
     assert sc.pc_name == "Kira"
     assert [b.id for b in sc.beats][:2] == ["question-innkeeper", "buy-supplies"]
     assert sc.beats[5].id == "illegal-action"
-    assert sc.beats[5].done_when == {
-        "command": "attack", "ok": False, "refusal_contains": "cannot reach",
-    }
+    # TVA-65: the illegal-action beat now passes on either the engine
+    # "cannot reach" refusal or a correct in-narration refusal (abstention).
+    any_of = sc.beats[5].done_when["any_of"]
+    assert {"command": "attack", "ok": False, "refusal_contains": "cannot reach"} in any_of
+    assert any("none_of" in clause for clause in any_of)
     assert all(b.max_player_messages > 0 for b in sc.beats)
+
+
+def test_tier2_bless_beat_removed():
+    # TVA-66: the tier2-spell (Bless) beat depended on unpredictable combat
+    # state and penalised a DM that correctly healed a dying PC — removed.
+    sc = load_scenario(SCENARIO)
+    assert "tier2-spell" not in {b.id for b in sc.beats}
 
 
 def test_build_campaign_creates_identical_starting_state(tmp_path, rules_path):

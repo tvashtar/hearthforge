@@ -44,16 +44,39 @@ def _matcher_clauses(done_when: dict) -> tuple[str, list]:
     return " ".join(clauses), params
 
 
-def beat_done(db_path: Path, done_when: dict, *, after_id: int) -> bool:
-    ok = 1 if done_when.get("ok", True) else 0
-    extra_sql, extra_params = _matcher_clauses(done_when)
+def _row_exists(db_path: Path, clause: dict, after_id: int) -> bool:
+    """True if some event-log row after after_id matches this single clause
+    (command + ok + the optional inputs/result/refusal_contains matchers)."""
+    ok = 1 if clause.get("ok", True) else 0
+    extra_sql, extra_params = _matcher_clauses(clause)
     with _connect(db_path) as db:
         row = db.execute(
             "SELECT COUNT(*) FROM event_log WHERE id > ? AND command = ?"
             f" AND json_extract(result, '$.ok') = ? {extra_sql}",
-            (after_id, done_when["command"], ok, *extra_params),
+            (after_id, clause["command"], ok, *extra_params),
         ).fetchone()
     return row[0] > 0
+
+
+def _clause_satisfied(db_path: Path, clause: dict, after_id: int) -> bool:
+    """One done_when clause. A `none_of` clause is the abstention path
+    (TVA-65): it is satisfied when NONE of its listed patterns produced a row
+    — i.e. the DM correctly declined an illegal action in narration without
+    executing it or taking a workaround, so there is no tool call to match.
+    Any other clause is the positive path: a matching row must exist."""
+    if "none_of" in clause:
+        return not any(_row_exists(db_path, sub, after_id) for sub in clause["none_of"])
+    return _row_exists(db_path, clause, after_id)
+
+
+def beat_done(db_path: Path, done_when: dict, *, after_id: int) -> bool:
+    """A beat is done when its done_when is satisfied. `any_of` gives OR
+    semantics over sub-clauses (TVA-65: an `illegal-action` beat passes on
+    either the engine refusal OR a correct in-narration refusal); a flat
+    done_when is a single clause."""
+    if "any_of" in done_when:
+        return any(_clause_satisfied(db_path, c, after_id) for c in done_when["any_of"])
+    return _clause_satisfied(db_path, done_when, after_id)
 
 
 def campaign_open(db_path: Path) -> bool:
@@ -90,7 +113,20 @@ def classify_beat_failure(db_path: Path, done_when: dict, *, after_id: int) -> d
     (not on ok), that last row may be an ok=True row and this returns its
     digest, not a refusal. That is intentional triage output under the
     caller invariant — do not call this standalone and trust `reason` blindly.
+
+    For an `any_of` done_when (TVA-65), triage on the first sub-clause that
+    names a command — the primary mechanical path (e.g. the engine
+    "cannot reach" refusal). A failed abstention-only beat (all `none_of`
+    clauses) surfaces "worked_around": the DM executed the illegal action or
+    a workaround, which is exactly why the abstention path did not hold.
     """
+    if "any_of" in done_when:
+        primary = next(
+            (c for c in done_when["any_of"] if "command" in c), None
+        )
+        if primary is None:
+            return {"reason": "worked_around"}
+        done_when = primary
     with _connect(db_path) as db:
         rows = db.execute(
             "SELECT result FROM event_log WHERE id > ? AND command = ? ORDER BY id",

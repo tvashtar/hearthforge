@@ -1,3 +1,4 @@
+from evals import player
 from evals.player import build_player_prompt
 from evals.scenario import Beat, Scenario
 
@@ -28,3 +29,12 @@ def test_narration_is_truncated_to_recent_tail():
     assert len(user) < 9000
     assert "chunk 49" in user      # newest kept
     assert "chunk 0 " not in user  # oldest dropped
+
+
+def test_player_message_never_starts_with_slash(monkeypatch):
+    """A leading "/" is intercepted by Claude Code slash-command parsing
+    before the DM model ever sees the message (TVA-33)."""
+    monkeypatch.setattr(player.llm, "complete", lambda *a, **k: "/roll")
+    msg = player.next_player_message(None, _scenario(), _beat(), [])
+    assert not msg.startswith("/")
+    assert "roll" in msg

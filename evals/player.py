@@ -47,4 +47,7 @@ def next_player_message(
 ) -> str:
     del client  # kept for signature stability; evals.llm resolves credentials itself
     system, user = build_player_prompt(scenario, beat, narration)
-    return llm.complete(PLAYER_MODEL, system, user, 300)
+    reply = llm.complete(PLAYER_MODEL, system, user, 300).strip()
+    # A leading "/" is intercepted by Claude Code slash-command parsing before
+    # the DM model ever sees the message (TVA-33) — never emit one.
+    return reply.lstrip("/ ") or reply

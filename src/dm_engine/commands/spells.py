@@ -239,7 +239,12 @@ def cast_spell(
     if record is None:
         return refuse("cast_spell", f"unknown spell {spell_slug!r}")
     if spell_slug not in char["spells_known"]:
-        return refuse("cast_spell", f"{caster} does not know {record.name}")
+        known = ", ".join(sorted(char["spells_known"])) if char["spells_known"] else "none"
+        return refuse(
+            "cast_spell",
+            f"{caster} does not know {record.name} (knows: {known}) — add "
+            "spells at character creation, or adjudicate the effect via dm_ruling",
+        )
 
     is_pc = char["role"] == "pc"
     cid = char["id"]

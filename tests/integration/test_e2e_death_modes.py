@@ -30,11 +30,16 @@ def _run_lethal_script(tmp_path, rules_path, death_mode):
     )
     assert registry.execute("create_character", ctx, **KIRA_KWARGS).ok
 
+    # adjust_hp now routes through apply_damage_to_target (TVA-53): an
+    # exact-to-zero delta lands the same dying state a real hit would
+    # (unconscious + fresh death saves), no manual set_condition needed. A
+    # bigger overkill delta (the old -1000) would instead read as instant
+    # death (massive overflow), which would skip the death-save script below.
+    kira = ctx.store.get_character("Kira")
     drop = registry.execute(
         "dm_ruling", ctx, description="A scythe trap opens Kira's throat.",
         rationale="test scripting",
-        effects=[{"op": "adjust_hp", "target": "Kira", "delta": -1000},
-                 {"op": "set_condition", "target": "Kira", "condition": "unconscious"}],
+        effects=[{"op": "adjust_hp", "target": "Kira", "delta": -kira["max_hp"]}],
     )
     assert drop.ok, drop.refusal
     res = ctx.store.get_resources(ctx.store.get_character("Kira")["id"])

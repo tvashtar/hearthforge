@@ -113,6 +113,71 @@ def test_ruling_adjust_hp_unknown_target_lists_combatants(ctx):
     assert "Kira" in result.refusal
 
 
+def test_adjust_hp_to_zero_starts_dying(ctx, party):
+    # TVA-53: adjust_hp must route through apply_damage_to_target so
+    # crossing 0 HP grants unconscious + a fresh dying state, exactly like
+    # a real attack would — not a bare clamp that leaves Kira conscious.
+    kira = ctx.store.get_character("Kira")
+    hp = ctx.store.get_resources(kira["id"])["hp"]
+    result = registry.execute(
+        "dm_ruling", ctx, description="A collapsing ceiling flattens Kira",
+        rationale="environmental hazard, RAW gap",
+        effects=[{"op": "adjust_hp", "target": "Kira", "delta": -hp}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert "unconscious" in res["conditions"]
+    assert res["death_saves"] == {
+        "successes": 0, "failures": 0, "stable": False, "dead": False,
+    }
+    applied = result.data["applied"][0]
+    assert applied["status"] == "unconscious"
+
+
+def test_adjust_hp_from_zero_revives(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 1, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="A healing potion is poured down Kira's throat",
+        rationale="environmental narration, RAW gap",
+        effects=[{"op": "adjust_hp", "target": "Kira", "delta": 3}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 3
+    assert "unconscious" not in res["conditions"]
+    assert res["death_saves"] == {
+        "successes": 0, "failures": 0, "stable": False, "dead": False,
+    }
+    assert result.data["applied"][0]["hp"] == 3
+
+
+def test_adjust_hp_breaks_concentration_on_knockout(ctx, party):
+    aldric = ctx.store.get_character("Brother Aldric")
+    hp = ctx.store.get_resources(aldric["id"])["hp"]
+    ctx.store.update_resources(
+        aldric["id"],
+        concentration={"spell": "bless", "day": 1, "minutes": 0,
+                       "duration": "Concentration, up to 1 minute"},
+    )
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="A collapsing ceiling flattens Brother Aldric",
+        rationale="environmental hazard, RAW gap",
+        effects=[{"op": "adjust_hp", "target": "Brother Aldric", "delta": -hp}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(aldric["id"])
+    assert res["hp"] == 0
+    assert res["concentration"] is None
+    assert result.data["applied"][0]["concentration_broken"] is True
+
+
 def test_ruling_set_exhaustion_refuses_for_monster_target(ctx):
     registry.execute("start_combat", ctx,
                      monsters=[{"slug": "goblin", "count": 1, "band": "near"}],

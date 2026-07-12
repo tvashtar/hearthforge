@@ -268,10 +268,27 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
                     ]
             ctx.store.update_combat(combatants=combatants)
             return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
-        res = ctx.store.get_resources(char["id"])
-        hp = max(0, min(char["max_hp"], res["hp"] + delta))
-        ctx.store.update_resources(char["id"], hp=hp)
-        return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
+
+        # Route through the real transition helpers so crossing 0 HP behaves
+        # exactly like damage/healing (unconscious, dying state, death saves,
+        # concentration, combatant flag). Local imports dodge module cycles.
+        from dm_engine.commands.attacks import apply_damage_to_target
+        from dm_engine.commands.spells import _apply_healing
+
+        if delta < 0:
+            frag = apply_damage_to_target(
+                ctx, char["name"], -delta, "untyped", critical=False
+            )
+            echo = {"op": "adjust_hp", "target": target, "delta": delta,
+                    "hp": frag["target"]["hp"]}
+            if "status" in frag["target"]:
+                echo["status"] = frag["target"]["status"]
+            if frag.get("concentration_broken"):
+                echo["concentration_broken"] = True
+            return echo
+        healed = _apply_healing(ctx, char["name"], delta)
+        return {"op": "adjust_hp", "target": target, "delta": delta,
+                "hp": healed["hp"]}
 
     if kind in ("set_condition", "clear_condition"):
         target, condition = op["target"], op["condition"]

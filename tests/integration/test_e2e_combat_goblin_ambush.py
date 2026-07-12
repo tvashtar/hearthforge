@@ -224,13 +224,17 @@ def test_goblin_ambush_gate(tmp_path, rules_path):
         assert flee.data["opportunity_attacks_from"] == ["Kira"]
 
         # --- forced dying sequence -> death save -> cure-wounds revival -------
+        # adjust_hp now routes through apply_damage_to_target (TVA-53), so an
+        # exact-to-zero delta lands Kira in the same dying state a real hit
+        # would: unconscious + fresh death saves, no manual set_condition
+        # needed. A larger overkill delta would instead read as instant
+        # death (massive overflow), which isn't what this script wants.
         drop = run(
             "dm_ruling",
             description="A goblin's lucky crit lays Kira out cold.",
             rationale="test scripting",
             effects=[
-                {"op": "adjust_hp", "target": "Kira", "delta": -1000},
-                {"op": "set_condition", "target": "Kira", "condition": "unconscious"},
+                {"op": "adjust_hp", "target": "Kira", "delta": -_kira_resources(ctx)["hp"]},
             ],
         )
         assert drop.ok, drop.refusal

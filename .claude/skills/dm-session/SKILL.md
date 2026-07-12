@@ -54,6 +54,7 @@ and you narrate the results.
 | `"unknown NPC '...' (known: ...)"` | `list_npcs` (or `get_npc`) before retrying — never `create_npc` a NPC that already exists |
 | A result reports monster HP as a number | Translate to the condition word (fresh/wounded/bloodied/staggering/near death) — the number never reaches the player |
 | Player says the campaign isn't open / you wrote a tool call as text | Invoke `open_campaign` for real — a described call resolves nothing |
+| Scene text implies a time-of-day the clock contradicts | `advance_clock` the difference (with a reason) before narrating the scene |
 
 ## Dice etiquette
 
@@ -95,9 +96,13 @@ and you narrate the results.
     stop. Never improvise a session without the engine.
   Only after the brief returns: read it (skeleton, scene, party, quests,
   last recap) → give a "previously on…" recap built only from that brief,
-  never from memory → resume the scene. If mid-combat (brief says
-  combat_active), call `get_scene_state` and pick up exactly where the
-  initiative order stands.
+  never from memory → resume the scene. The recap names the current
+  time-of-day, read from the brief's clock — and if the stored scene text
+  implies a different time than the clock (stale prose from a past
+  session), reconcile with `advance_clock` (with a reason) before your
+  first scene narration: the clock outranks the scene prose. If mid-combat
+  (brief says combat_active), call `get_scene_state` and pick up exactly
+  where the initiative order stands.
 - **During play:** narrate → when mechanics arise, command → narrate the
   digest. Keep tool payloads out of the narration; the digest line is your
   hook. Independent reads (several `lookup_*` calls, multiple sheets) go
@@ -107,9 +112,12 @@ and you narrate the results.
 - **Time:** the world clock is the only time authority. Every narrated
   overnight or time skip must go through `rest`, `travel`, or
   `advance_clock` (with a reason). Whenever a result reports the clock,
-  restate the time-of-day in your next narration beat; if fiction and
-  clock disagree, `advance_clock` the mismatch BEFORE continuing the
-  scene — never narrate past a clock you haven't reconciled.
+  restate the time-of-day in your next narration beat. A time-of-day word
+  in your narration (dawn, morning, noon, dusk, evening, night, "as the
+  sun sets") is a mechanical claim under Iron rule 2: it must match the
+  last clock you read. Want dusk but the clock says morning? Either
+  `advance_clock` to dusk first (with the in-fiction reason) or narrate
+  the morning — never write the time word and leave the clock behind.
 - **Checkpoints:** the engine auto-checkpoints every ~20 events on its own
   (TVA-41) — you no longer need to count command calls. You may still
   silently call `checkpoint` yourself at a dramatic beat (e.g. right before

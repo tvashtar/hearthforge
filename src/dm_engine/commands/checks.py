@@ -8,6 +8,7 @@ hp, conditions, character status, and (if a combat is active) combat_state.
 
 from __future__ import annotations
 
+from dm_engine.commands.combatants import set_combatant_defeated
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import SKILL_ABILITIES, normalize_slug
@@ -320,17 +321,7 @@ def saving_throw(
 
 
 def _mark_combatant_defeated(ctx: CommandContext, character: str) -> None:
-    combat = ctx.store.combat()
-    if not combat["active"]:
-        return
-    combatants = combat["combatants"]
-    changed = False
-    for combatant in combatants:
-        if combatant.get("key") == character:
-            combatant["defeated"] = True
-            changed = True
-    if changed:
-        ctx.store.update_combat(combatants=combatants)
+    set_combatant_defeated(ctx, character, True)
 
 
 @command("death_save")

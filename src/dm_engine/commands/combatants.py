@@ -21,6 +21,22 @@ place that resolves an identifier against a list of live combatants:
 from __future__ import annotations
 
 
+def set_combatant_defeated(ctx, character: str, defeated: bool) -> None:
+    """Set the active-combat tracker's defeated flag for a character
+    combatant (no-op out of combat or for unknown keys)."""
+    combat = ctx.store.combat()
+    if not combat["active"]:
+        return
+    combatants = combat["combatants"]
+    changed = False
+    for combatant in combatants:
+        if combatant.get("key") == character:
+            combatant["defeated"] = defeated
+            changed = True
+    if changed:
+        ctx.store.update_combat(combatants=combatants)
+
+
 def describe_combatants(combatants: list[dict]) -> str:
     """Render live combatants for a refusal, e.g. 'Kira, bandit-1 "Fen
     Scout", bandit-2 "Fen Scout 2", Brother Aldric'. A combatant whose key

@@ -49,10 +49,19 @@ def test_dm_ruling_description_enumerates_effect_ops():
     # surface — every op and its required fields, no source-diving.
     desc = _description(registered_commands()["dm_ruling"], "dm_ruling")
     for op in ("adjust_hp", "set_condition", "clear_condition", "adjust_slot",
-               "set_exhaustion", "adjust_xp", "note"):
+               "set_exhaustion", "adjust_xp", "note",
+               "stabilize", "revive", "set_defeated"):  # TVA-54
         assert op in desc
     assert "slot_level" in desc  # per-op required fields, not just op names
     assert "rationale" in desc
+
+
+def test_stabilize_is_a_registered_command():
+    # TVA-54: stabilize surfaces in tool introspection just like death_save.
+    schema = input_schema(registered_commands()["stabilize"])
+    assert schema["properties"]["character"] == {"type": "string"}
+    assert schema["properties"]["medicine_by"] == {"type": "string"}
+    assert schema["required"] == ["character"]
 
 
 def test_open_campaign_is_a_registered_command_with_slug_schema():
@@ -95,3 +104,12 @@ def test_dm_ruling_description_shows_a_worked_effect_example():
     # "op" key, not just the bare op-name cheatsheet.
     desc = _description(registered_commands()["dm_ruling"], "dm_ruling")
     assert '"op": "adjust_hp"' in desc
+
+
+def test_travel_requires_hours_in_schema():
+    # TVA-58: `hours` used to default to 0, so a caller could omit it and
+    # silently no-op the hour component of a trip. Dropping the default
+    # makes the introspected schema mark it required.
+    schema = input_schema(registered_commands()["travel"])
+    assert "hours" in schema["required"]
+    assert "days" not in schema["required"]

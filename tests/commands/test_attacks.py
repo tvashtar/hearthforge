@@ -1,6 +1,10 @@
 import pytest
 
 from dm_engine.commands import registry
+from dm_engine.commands.attacks import _bonus_damage_riders
+from dm_engine.commands.registry import RecordingRoller
+from dm_engine.content.lookup import RulesDB
+from dm_engine.rules.attacks import roll_damage
 
 pytestmark = pytest.mark.usefixtures("party")
 
@@ -101,6 +105,79 @@ def test_monster_attack_drops_pc_to_dying(ctx, combat):
     assert res["hp"] == 0
     assert "unconscious" in res["conditions"]
     assert res["death_saves"]["failures"] == 0
+
+
+def _set_dying(ctx, name="Kira", failures=1):
+    """Put `name` at 0 hp, unconscious, mid-death-saves (one failure already
+    recorded) — the state `apply_damage_to_target`'s hp_before == 0 branch
+    expects on entry."""
+    char = ctx.store.get_character(name)
+    ctx.store.update_resources(
+        char["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": failures, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    return char
+
+
+def _start_goblin_engaged_with(ctx, target_key="Kira"):
+    """Start a one-goblin combat with the goblin engaged in melee with
+    `target_key`, and give the goblin the current turn."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == target_key:
+            c["band"] = "engaged"; c["engaged_with"] = ["goblin-1"]
+        if c["key"] == "goblin-1":
+            c["band"] = "engaged"; c["engaged_with"] = [target_key]
+    ctx.store.update_combat(combatants=combatants); ctx.store.conn.commit()
+    _force_turn(ctx, "goblin-1", band="engaged", engaged_with=[target_key])
+
+
+def test_damage_while_dying_kill_maps_to_defeated_in_narrative(ctx, party):
+    """TVA-51: a killing blow landed while already dying (hp_before == 0)
+    must honor death_mode, not hardcode 'dead'. Kira is unconscious and
+    dying (engaged melee vs. an unconscious target auto-crits per SRD, so
+    one hit adds two death-save failures — enough to push her 1 existing
+    failure to 3 and kill her)."""
+    _set_dying(ctx, "Kira", failures=1)
+    _start_goblin_engaged_with(ctx, "Kira")
+    result = None
+    for _ in range(20):
+        result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                                  attack_name="Scimitar", spend="none")
+        if result.ok and result.data["hit"]:
+            break
+    assert result is not None and result.ok and result.data["hit"], "no hit landed (seeded)"
+    assert result.data["critical"] is True  # unconscious + engaged => auto-crit
+    assert result.data["target"]["status"] == "defeated"
+    assert "Kira is defeated" in result.digest
+    assert ctx.store.get_character("Kira")["status"] == "defeated"
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is True
+
+
+def test_damage_while_dying_kill_maps_to_dead_in_hardcore(ctx_hardcore, party_hardcore):
+    """Same script on a hardcore campaign: the kill maps to 'dead', not
+    'defeated'."""
+    ctx = ctx_hardcore
+    _set_dying(ctx, "Kira", failures=1)
+    _start_goblin_engaged_with(ctx, "Kira")
+    result = None
+    for _ in range(20):
+        result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                                  attack_name="Scimitar", spend="none")
+        if result.ok and result.data["hit"]:
+            break
+    assert result is not None and result.ok and result.data["hit"], "no hit landed (seeded)"
+    assert result.data["critical"] is True
+    assert result.data["target"]["status"] == "dead"
+    assert "Kira is dead" in result.digest
+    assert ctx.store.get_character("Kira")["status"] == "dead"
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is True
 
 
 def test_apply_condition_validates_and_breaks_concentration(ctx):
@@ -255,6 +332,37 @@ def test_monster_attack_name_matches_case_insensitively(ctx, combat):
     result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
                               attack_name="scimitar", spend="action")
     assert result.ok, result.refusal
+
+
+def test_attack_name_defaults_when_single_attack(ctx, combat):
+    # TVA-58: Brother Aldric has exactly one attack (mace) — omitting
+    # attack_name is unambiguous, so it should resolve instead of refusing.
+    _engage_pair(ctx, "Brother Aldric", "goblin-1")
+    _force_turn(ctx, "Brother Aldric", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Brother Aldric", target="goblin-1")
+    assert result.ok, result.refusal
+    assert result.data["attack_name"] == "mace"
+
+
+def test_attack_name_still_required_when_multiple(ctx):
+    # TVA-58: a combatant with more than one attack still needs attack_name
+    # (or attack_names) — but the refusal now enumerates the options.
+    registry.execute(
+        "create_character", ctx, name="Dual", role="companion",
+        class_slug="fighter", race_slug="human",
+        abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"},
+                 {"weapon": "shortsword", "name": "shortsword"}],
+    )
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "Dual", "goblin-1")
+    _force_turn(ctx, "Dual", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Dual", target="goblin-1")
+    assert result.ok is False
+    assert "longsword" in result.refusal and "shortsword" in result.refusal
 
 
 def test_turn_order_refusal_names_active_combatant(ctx, combat):
@@ -576,8 +684,10 @@ def test_multiattack_param_validation(ctx, combat):
     both = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
                             attack_name="longsword", attack_names=["longsword"])
     assert both.ok is False
-    neither = registry.execute("attack", ctx, attacker="Kira", target="goblin-1")
-    assert neither.ok is False
+    # `neither` (no attack_name, no attack_names) is deliberately not tested
+    # here: TVA-58 makes it default to Kira's sole attack (longsword) rather
+    # than refuse — see test_attack_name_defaults_when_single_attack and
+    # test_attack_name_still_required_when_multiple.
     empty = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
                              attack_names=[])
     assert empty.ok is False
@@ -653,6 +763,272 @@ def test_single_attack_shape_unchanged(ctx, combat):
     for key in ("attack_roll", "hit", "critical", "damage", "target"):
         assert key in result.data
     assert "swings" not in result.data
+
+
+# --- riders on damaging attacks + non-attack actions (TVA-57) ------------
+
+
+def _duel_vs_kira(ctx, slug, *, target_ac=1, target_hp=100):
+    """Start combat with `slug` engaged in melee with Kira, its turn; Kira's
+    AC/HP forced so a monster swing lands (only a nat 1 misses) without
+    dropping her, so the swing data can be inspected."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": slug, "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE resources SET hp = ? WHERE character_id = ?",
+                           (target_hp, kira["id"]))
+    ctx.store.conn.execute("UPDATE characters SET ac = ? WHERE id = ?",
+                           (target_ac, kira["id"]))
+    ctx.store.conn.commit()
+    _engage_pair(ctx, f"{slug}-1", "Kira")
+    _force_turn(ctx, f"{slug}-1", band="engaged", engaged_with=["Kira"])
+
+
+def _land_hit(ctx, attacker, attack_name, target="Kira"):
+    """Roll `attack` until a seeded hit lands (spend='none'); return it."""
+    for _ in range(12):
+        result = registry.execute("attack", ctx, attacker=attacker,
+                                  target=target, attack_name=attack_name, spend="none")
+        assert result.ok, result.refusal
+        if result.data["hit"]:
+            return result
+    pytest.fail("no hit landed in 12 seeded attempts")  # pragma: no cover
+
+
+def test_damaging_attack_with_rider_surfaces_on_hit(ctx):
+    """The giant toad's bite deals damage AND grapples: a hit populates
+    data["damage"] and ALSO surfaces the structured grapple rider so the DM
+    can apply it (TVA-57)."""
+    _duel_vs_kira(ctx, "giant-toad")
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "piercing"
+    assert hit.data["damage"]["final"] >= 1
+    rider = hit.data["on_hit"]
+    assert rider is not None
+    assert rider["escape_dc"] == 13
+    assert "grappled" in rider["conditions"]
+    assert "grappled" in rider["text"]
+    # digest flags that a ruling is still owed
+    assert "rider" in hit.digest.lower()
+
+
+def test_plain_damage_attack_has_no_on_hit(ctx):
+    """A bandit's scimitar is pure weapon damage: no rider must be invented
+    on the swing (TVA-57 — plain weapon attacks stay rider-free)."""
+    _duel_vs_kira(ctx, "bandit")
+    hit = _land_hit(ctx, "bandit-1", "Scimitar")
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "slashing"
+    assert hit.data.get("on_hit") is None
+
+
+def _monster_action(rules_path, slug, action_name):
+    record = RulesDB(rules_path).get_monster(slug)
+    actions = record.model_extra["actions"]
+    return next(a for a in actions if a["name"].lower() == action_name.lower())
+
+
+def test_bonus_damage_riders_parses_unconditional_secondary(rules_path):
+    """SRD secondary damage introduced as "plus N (dice) <type> damage" auto-
+    resolves at Tier 1 (TVA-63): giant-toad's poison bite, the dragon's fire
+    bite, and the ankheg's acid bite all carry an unconditional rider."""
+    action = _monster_action(rules_path, "giant-toad", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "1d10", "damage_type": "poison"}
+    ]
+
+    action = _monster_action(rules_path, "adult-red-dragon", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "2d6", "damage_type": "fire"}
+    ]
+
+    action = _monster_action(rules_path, "ankheg", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "1d6", "damage_type": "acid"}
+    ]
+
+
+def test_bonus_damage_riders_excludes_save_gated(rules_path):
+    """Save-gated secondary damage ("taking ... on a failed save") stays
+    DM-adjudicated, not auto-applied: the assassin's poison and the
+    aboleth's acid both require a saving throw, so neither is a rider."""
+    action = _monster_action(rules_path, "assassin", "Shortsword")
+    assert _bonus_damage_riders(action) == []
+
+    action = _monster_action(rules_path, "aboleth", "Tentacle")
+    assert _bonus_damage_riders(action) == []
+
+
+# --- bonus-damage rider application (TVA-63) -----------------------------
+
+
+def test_giant_toad_bite_auto_applies_poison_rider(ctx):
+    """The giant toad's bite carries an unconditional poison rider: a hit
+    auto-resolves BOTH the piercing primary and the poison bonus, and the
+    target's HP drops by their sum. The grapple rider (on_hit) is unrelated
+    to the poison and must still surface (TVA-57 stays intact)."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira_id = ctx.store.get_character("Kira")["id"]
+    hp_before = ctx.store.get_resources(kira_id)["hp"]
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "piercing"
+    bonus = hit.data["bonus_damage"]
+    assert len(bonus) == 1
+    rider = bonus[0]
+    assert rider["type"] == "poison"
+    assert rider["raw"] > 0
+    assert rider["final"] > 0
+
+    hp_after = ctx.store.get_resources(kira_id)["hp"]
+    assert hp_before - hp_after == hit.data["damage"]["final"] + rider["final"]
+
+    # grapple rider is untouched by rider auto-resolution (TVA-57)
+    on_hit = hit.data["on_hit"]
+    assert on_hit is not None
+    assert "grappled" in on_hit["conditions"]
+
+    assert f"+{rider['final']} poison" in hit.digest
+
+
+def test_plain_attack_has_no_bonus_damage(ctx):
+    """A bandit's scimitar has no secondary damage entry: no rider is
+    invented on the swing."""
+    _duel_vs_kira(ctx, "bandit")
+    hit = _land_hit(ctx, "bandit-1", "Scimitar")
+    assert hit.data["damage"] is not None
+    assert not hit.data.get("bonus_damage")
+
+
+def test_bonus_rider_doubles_dice_on_crit():
+    """A rider is rolled through the SAME roll_damage path as the primary hit,
+    so `_resolve_swing` passing the swing's `critical` flag through is what
+    makes a crit double the rider dice. Pin that contract at the roll layer:
+    a crit rolls TWICE the dice of a non-crit for the giant-toad's 1d10 poison
+    rider (2 rolls vs 1). Asserting on dice COUNT (not the summed raw) is
+    falsifiable — forcing critical=False here would drop the count to 1 and
+    fail, unlike a range check on the sum where a non-doubled 1d10 (1-10) is a
+    subset of a doubled 2d10 (2-20)."""
+    non_crit = roll_damage(RecordingRoller(99), "1d10", critical=False)
+    assert len(non_crit.rolls) == 1
+
+    crit = roll_damage(RecordingRoller(99), "1d10", critical=True)
+    assert len(crit.rolls) == 2
+    # doubled dice => strictly more total on the same seed (both dice > 0)
+    assert crit.total > non_crit.total
+
+
+def test_poison_resistant_target_halves_only_the_rider(ctx):
+    """The giant toad's bite is piercing (no resistance on a duergar) plus a
+    poison rider — and the duergar has plain poison resistance (not piercing).
+    The rider halves; the primary piercing damage does not."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "giant-toad", "count": 1, "band": "near"},
+                               {"slug": "duergar", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "giant-toad-1", "duergar-1")
+    _force_turn(ctx, "giant-toad-1", band="engaged", engaged_with=["duergar-1"])
+    hit = None
+    for _ in range(60):
+        result = registry.execute("attack", ctx, attacker="giant-toad-1",
+                                  target="duergar-1", attack_name="Bite", spend="none")
+        assert result.ok, result.refusal
+        if result.data["hit"]:
+            hit = result
+            break
+    assert hit is not None, "no hit landed in 60 seeded attempts"  # pragma: no cover
+
+    assert hit.data["damage"]["applied"] == []  # piercing: not resisted
+    rider = hit.data["bonus_damage"][0]
+    assert rider["type"] == "poison"
+    assert "resistance" in rider["applied"]
+    assert rider["final"] == rider["raw"] // 2
+
+
+# --- one swing == one death event (TVA-63 double-count guard) -------------
+
+
+def test_swing_damage_is_one_death_event_on_dying_target(ctx):
+    """A single attack is ONE damage event against a dying PC's death saves:
+    the primary hit and every auto-rider together inflict at most one failure
+    (two on a crit), never one-per-damage-type. Regression guard for the
+    rider double-count bug — a giant-toad crit-bite (piercing + poison rider)
+    on a fresh-dying PC must add exactly two failures, not four."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira = ctx.store.get_character("Kira")
+    # Large max_hp so the combined bite is failure-based, not massive-damage
+    # instant death — isolates the failure-count contract.
+    ctx.store.conn.execute("UPDATE characters SET max_hp = 100 WHERE id = ?",
+                           (kira["id"],))
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 0, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    assert hit.data["critical"] is True  # unconscious + engaged => auto-crit
+    assert hit.data["bonus_damage"][0]["type"] == "poison"  # the rider fired
+    saves = ctx.store.get_resources(kira["id"])["death_saves"]
+    assert saves["failures"] == 2   # one crit event, NOT 2 (primary) + 2 (rider)
+    assert saves["dead"] is False
+
+
+def test_primary_drop_to_zero_with_rider_leaves_fresh_dying_state(ctx):
+    """When the primary hit drops a conscious PC to 0, the whole swing is one
+    event: the PC gets a FRESH dying state (0 failures) and the rider's excess
+    damage does NOT count as an immediate death-save failure."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE characters SET max_hp = 100 WHERE id = ?",
+                           (kira["id"],))
+    ctx.store.update_resources(kira["id"], hp=1, conditions=[])
+    ctx.store.conn.commit()
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert "unconscious" in res["conditions"]
+    assert res["death_saves"]["failures"] == 0  # rider excess, not a failure
+    assert hit.data["bonus_damage"][0]["type"] == "poison"
+
+
+def test_rider_helps_defeat_low_hp_target(ctx):
+    """A swing whose auto-rider damage helps finish a low-HP target defeats it:
+    data['defeated'] is set and the combatant tracker is marked (TVA-63 F3)."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "giant-toad", "count": 1, "band": "near"},
+                               {"slug": "bandit", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "giant-toad-1", "bandit-1")
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "bandit-1":
+            c["hp"] = 3  # any bite finishes it
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    _force_turn(ctx, "giant-toad-1", band="engaged", engaged_with=["bandit-1"])
+    hit = _land_hit(ctx, "giant-toad-1", "Bite", target="bandit-1")
+    assert hit.data["defeated"] is True
+    assert hit.data["bonus_damage"][0]["type"] == "poison"  # rider was part of it
+    bandit = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "bandit-1")
+    assert bandit["defeated"] is True
+
+
+def test_non_attack_action_refusal_names_the_action(ctx):
+    """Swallow is a stat-block action, not a weapon attack. Naming it must
+    return an actionable refusal that names the action, says it isn't a weapon
+    attack, quotes its first sentence, and points at roll_dice + dm_ruling."""
+    _duel_vs_kira(ctx, "giant-toad")
+    result = registry.execute("attack", ctx, attacker="giant-toad-1",
+                              target="Kira", attack_name="Swallow", spend="none")
+    assert result.ok is False
+    assert "Swallow" in result.refusal
+    assert "not a weapon attack" in result.refusal
+    assert "makes one bite attack" in result.refusal  # first sentence of desc
+    assert "roll_dice" in result.refusal
+    assert "dm_ruling" in result.refusal
 
 
 # --- condition commands -------------------------------------------------

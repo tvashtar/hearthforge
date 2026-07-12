@@ -20,13 +20,16 @@ from typing import Any
 
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
+    defeated_status,
     find_combatant,
+    set_combatant_defeated,
     unknown_combatant_refusal,
 )
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.rules.active_effects import validate_mechanics
 from dm_engine.rules.conditions import CONDITIONS
+from dm_engine.rules.death import DeathSaveState
 
 # The effect-op vocabulary: op name -> its required fields. Single source of
 # truth (TVA-25) — _validate_op, the unknown-op refusal, and the MCP tool
@@ -42,6 +45,9 @@ _OP_FIELDS: dict[str, str] = {
     " [duration_minutes | expires_on_rest, concentration, concentration_by]",
     "end_effect": "target, name",
     "note": "text",
+    "stabilize": "target",
+    "revive": "target, hp",
+    "set_defeated": "target",
 }
 _OPS = tuple(_OP_FIELDS)
 _REST_KINDS = ("short", "long")
@@ -131,6 +137,11 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         rkind, first, _ = _resolve_target(ctx, target)
         if rkind in ("unknown", "ambiguous"):
             return _target_refusal(ctx, target, rkind, first)
+        # A heal (delta >= 0) now revives a character at 0 HP (TVA-53). A
+        # hardcore-dead PC must not be resurrectable by ruling — mirror the
+        # guard cast_spell uses (spells.py), refusing before the batch applies.
+        if delta >= 0 and rkind == "character" and first["status"] == "dead":
+            return f"{target} is dead — revival is not possible in a hardcore campaign"
         return None
 
     if kind in ("set_condition", "clear_condition"):
@@ -238,6 +249,52 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return f"{target} has no active effect named {name!r} (active: {active})"
         return None
 
+    if kind == "stabilize":
+        target = op.get("target")
+        if not isinstance(target, str) or not target:
+            return "stabilize requires a target"
+        rkind, char, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, char)
+        if rkind == "monster":
+            return f"{target} is a monster; stabilize targets characters only"
+        res = ctx.store.get_resources(char["id"])
+        ds = res["death_saves"]
+        if res["hp"] > 0 or ds["stable"] or ds["dead"] or char["status"] != "active":
+            return f"{target} is not dying (0 hp, not yet stable or dead)"
+        return None
+
+    if kind == "revive":
+        target, hp = op.get("target"), op.get("hp")
+        if not isinstance(target, str) or not target:
+            return "revive requires a target"
+        rkind, char, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, char)
+        if rkind == "monster":
+            return f"{target} is a monster; revive targets characters only"
+        if char["status"] == "dead":
+            return f"{target} is dead — only hardcore campaigns kill, and dead is permanent"
+        if char["status"] not in ("defeated", "active"):
+            return f"{target} has status {char['status']!r}; revive expects defeated or active"
+        res = ctx.store.get_resources(char["id"])
+        if res["hp"] != 0 and char["status"] != "defeated":
+            return f"{target} is not defeated or at 0 hp"
+        if not isinstance(hp, int) or isinstance(hp, bool) or hp < 1:
+            return "revive requires an integer hp >= 1"
+        return None
+
+    if kind == "set_defeated":
+        target = op.get("target")
+        if not isinstance(target, str) or not target:
+            return "set_defeated requires a target"
+        rkind, char, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, char)
+        if rkind == "monster":
+            return f"{target} is a monster; set_defeated targets characters only"
+        return None
+
     # note
     text = op.get("text")
     if not isinstance(text, str) or not text.strip():
@@ -268,10 +325,35 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
                     ]
             ctx.store.update_combat(combatants=combatants)
             return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
-        res = ctx.store.get_resources(char["id"])
-        hp = max(0, min(char["max_hp"], res["hp"] + delta))
-        ctx.store.update_resources(char["id"], hp=hp)
-        return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
+
+        # A zero delta is a no-op: never route it through the heal helper,
+        # whose revive branch fires on hp==0 regardless of amount and would
+        # otherwise resurrect a dying character (drop unconscious, reset death
+        # saves) for a heal of nothing.
+        if delta == 0:
+            hp = ctx.store.get_resources(char["id"])["hp"]
+            return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
+
+        # Route through the real transition helpers so crossing 0 HP behaves
+        # exactly like damage/healing (unconscious, dying state, death saves,
+        # concentration, combatant flag). Local imports dodge module cycles.
+        from dm_engine.commands.attacks import apply_damage_to_target
+        from dm_engine.commands.spells import _apply_healing
+
+        if delta < 0:
+            frag = apply_damage_to_target(
+                ctx, char["name"], -delta, "untyped", critical=False
+            )
+            echo = {"op": "adjust_hp", "target": target, "delta": delta,
+                    "hp": frag["target"]["hp"]}
+            if "status" in frag["target"]:
+                echo["status"] = frag["target"]["status"]
+            if frag.get("concentration_broken"):
+                echo["concentration_broken"] = True
+            return echo
+        healed = _apply_healing(ctx, char["name"], delta)
+        return {"op": "adjust_hp", "target": target, "delta": delta,
+                "hp": healed["hp"]}
 
     if kind in ("set_condition", "clear_condition"):
         target, condition = op["target"], op["condition"]
@@ -372,6 +454,36 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
             ctx.store.delete_effect(effect["id"])
         return {"op": "end_effect", "target": target,
                 "name": matches[0]["name"], "ended": len(matches)}
+
+    if kind == "stabilize":
+        _, char, _ = _resolve_target(ctx, op["target"])
+        ctx.store.update_resources(
+            char["id"], death_saves=DeathSaveState(stable=True).model_dump()
+        )
+        return {"op": "stabilize", "target": op["target"]}
+
+    if kind == "revive":
+        _, char, _ = _resolve_target(ctx, op["target"])
+        res = ctx.store.get_resources(char["id"])
+        hp = min(char["max_hp"], op["hp"])
+        conditions = [c for c in res["conditions"] if c != "unconscious"]
+        ctx.store.update_resources(
+            char["id"], hp=hp, conditions=conditions,
+            death_saves=DeathSaveState().model_dump(),
+        )
+        ctx.store.update_character(char["id"], status="active")
+        set_combatant_defeated(ctx, char["name"], False)
+        return {"op": "revive", "target": op["target"], "hp": hp}
+
+    if kind == "set_defeated":
+        _, char, _ = _resolve_target(ctx, op["target"])
+        status = defeated_status(ctx)
+        ctx.store.update_resources(
+            char["id"], hp=0, death_saves=DeathSaveState(dead=True).model_dump()
+        )
+        ctx.store.update_character(char["id"], status=status)
+        set_combatant_defeated(ctx, char["name"], True)
+        return {"op": "set_defeated", "target": op["target"], "status": status}
 
     # note: no state change; it lands in the event record via `data["applied"]`.
     return {"op": "note", "text": op["text"]}

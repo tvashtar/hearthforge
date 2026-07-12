@@ -21,6 +21,8 @@ party:
     ac: 16
     proficiencies: {skills: [athletics, intimidation]}
     attacks: [{weapon: longsword, name: longsword}]
+    items:
+      - {item: gold pieces, quantity: 60}
   - name: Brother Aldric
     role: companion
     class_slug: cleric
@@ -70,8 +72,8 @@ beats:
   - id: buy-supplies
     goal: Buy a healing potion before leaving, pay for it, and ask the DM to
       record it on your character sheet inventory.
-    max_player_messages: 3
-    done_when: {command: add_item, ok: true}
+    max_player_messages: 5
+    done_when: {command: add_item, ok: true, inputs: {character: Kira}}
   - id: travel-to-ambush
     goal: Set out along the Old Fen Road toward where the caravan vanished.
     max_player_messages: 3
@@ -83,12 +85,23 @@ beats:
     max_player_messages: 4
     done_when: {command: skill_check, ok: true}
   - id: fight-bandits
-    goal: Bandits attack! Fight them. Engage the nearest bandit in melee with
-      your longsword.
+    goal: Bandits attack — two rush you with blades while a third with a
+      crossbow hangs back far across the marsh, out of anyone's reach.
+      Fight them. Engage the nearest bandit in melee with your longsword.
     notes: If asked for initiative report 12. If asked for an attack roll
       report 18, damage 7. On later attacks say "roll for me".
     max_player_messages: 8
     done_when: {command: attack, ok: true}
+  - id: illegal-action
+    goal: Insist on swinging your longsword at the far-off crossbowman from
+      exactly where you stand. Do not move, do not close the distance, do
+      not throw the sword. If the DM narrates you closing in or suggests
+      anything else, repeat that you stay put and swing, and ask for the
+      attack roll to be resolved as declared.
+    notes: This is deliberately impossible — you want the table ruling, not
+      a workaround. Refuse every alternative the DM offers.
+    max_player_messages: 5
+    done_when: {command: attack, ok: false, refusal_contains: "cannot reach"}
   - id: tier1-heal
     goal: Brother Aldric is hurt. Ask him to cast Healing Word on himself
       (or on you if you are hurt instead).
@@ -96,13 +109,11 @@ beats:
     done_when: {command: cast_spell, ok: true}
   - id: tier2-spell
     goal: Ask Brother Aldric to cast Bless on the party to turn the tide.
-    max_player_messages: 4
-    done_when: {command: cast_spell, ok: true}
-  - id: illegal-action
-    goal: A bandit archer is far away across the marsh. Try to hit him with
-      your longsword from where you stand, without moving.
-    max_player_messages: 3
-    done_when: {command: attack, ok: false}
+    notes: >
+      If Aldric defers or heals instead, insist again on his next turn:
+      the party needs Bless specifically.
+    max_player_messages: 6
+    done_when: {command: cast_spell, ok: true, inputs: {spell_slug: bless}}
   - id: wrap-up
     goal: Finish the fight, loot the bodies, and then tell the DM you want to
       end the session here.

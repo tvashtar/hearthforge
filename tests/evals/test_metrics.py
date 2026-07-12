@@ -94,6 +94,93 @@ def test_beat_done_respects_after_id_and_ok(event_db):
     assert not beat_done(event_db, {"command": "end_session", "ok": True}, after_id=0)
 
 
+# --- TVA-60: done_when matchers (inputs, result paths, refusal_contains) ---
+
+
+def test_beat_done_inputs_matcher(party):
+    ctx = party
+    registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                     spell_slug="cure-wounds", targets=["Brother Aldric"])
+    registry.execute("cast_spell", ctx, caster="Brother Aldric", spell_slug="bless")
+    db_path = ctx.store.root / "campaign.sqlite"
+    done_when = {"command": "cast_spell", "ok": True, "inputs": {"spell_slug": "bless"}}
+    assert beat_done(db_path, done_when, after_id=0)
+    missed = {"command": "cast_spell", "ok": True,
+              "inputs": {"spell_slug": "hold-person"}}
+    assert not beat_done(db_path, missed, after_id=0)
+
+
+def test_beat_done_refusal_contains(party):
+    ctx = party
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "far"}],
+                     pc_initiative=15)
+    combatants = ctx.store.combat()["combatants"]
+    idx = next(i for i, c in enumerate(combatants) if c["key"] == "goblin-1")
+    ctx.store.update_combat(turn_index=idx)
+    ctx.store.conn.commit()
+    # not Kira's turn: turn_index points at goblin-1
+    not_turn = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                                attack_name="longsword")
+    assert not not_turn.ok and "not Kira's turn" in not_turn.refusal
+    # give Kira the turn back but leave her out of longsword range ("far")
+    for c in combatants:
+        if c["key"] == "Kira":
+            c["budget"] = {"speed": 30, "movement_remaining": 30,
+                           "action_available": True, "bonus_action_available": True,
+                           "reaction_available": True}
+    kira_idx = next(i for i, c in enumerate(combatants) if c["key"] == "Kira")
+    ctx.store.update_combat(combatants=combatants, turn_index=kira_idx)
+    ctx.store.conn.commit()
+    out_of_range = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                                    attack_name="longsword")
+    assert not out_of_range.ok and "cannot reach" in out_of_range.refusal
+
+    db_path = ctx.store.root / "campaign.sqlite"
+    reach = {"command": "attack", "ok": False, "refusal_contains": "cannot reach"}
+    assert beat_done(db_path, reach, after_id=0)
+    missed = {"command": "attack", "ok": False, "refusal_contains": "no such text"}
+    assert not beat_done(db_path, missed, after_id=0)
+
+
+def test_beat_done_result_path_matcher(party):
+    ctx = party
+    cast = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                            spell_slug="bless")
+    assert cast.ok and cast.data["needs_ruling"]
+    db_path = ctx.store.root / "campaign.sqlite"
+    done_when = {"command": "cast_spell", "ok": True,
+                 "result": {"data.needs_ruling": 1}}
+    assert beat_done(db_path, done_when, after_id=0)
+    missed = {"command": "cast_spell", "ok": True,
+              "result": {"data.needs_ruling": 0}}
+    assert not beat_done(db_path, missed, after_id=0)
+
+
+def test_classify_uses_same_matchers(party):
+    ctx = party
+    marker = ctx.store.conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM event_log"
+    ).fetchone()[0]
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "far"}],
+                     pc_initiative=15)
+    combatants = ctx.store.combat()["combatants"]
+    idx = next(i for i, c in enumerate(combatants) if c["key"] == "goblin-1")
+    ctx.store.update_combat(turn_index=idx)
+    ctx.store.conn.commit()
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="longsword")
+    assert not result.ok and "not Kira's turn" in result.refusal
+
+    db_path = ctx.store.root / "campaign.sqlite"
+    done_when = {"command": "attack", "ok": False, "refusal_contains": "cannot reach"}
+    assert not beat_done(db_path, done_when, after_id=marker)
+    detail = classify_beat_failure(db_path, done_when, after_id=marker)
+    assert detail["reason"] == "refused"
+    assert "not Kira's turn" in detail["refusal"]
+
+
 def test_metrics_catch_each_planted_defect(event_db, fixture_transcript):
     m = compute_metrics(event_db, fixture_transcript)
     assert m["refusals"] == 3          # 2 attack refusals + 1 crash row (ok=false)

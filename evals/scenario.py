@@ -63,12 +63,22 @@ def build_campaign(
     )
     try:
         for member in scenario.party:
+            member = dict(member)
+            items = member.pop("items", [])
             result = registry.execute("create_character", ctx, **member)
             if not result.ok:
                 raise RuntimeError(
                     f"create_character failed for {member.get('name')!r}: "
                     f"{result.refusal}"
                 )
+            for item_spec in items:
+                r = registry.execute(
+                    "add_item", ctx, character=member["name"], **item_spec
+                )
+                if not r.ok:
+                    raise RuntimeError(
+                        f"add_item failed for {member['name']!r}: {r.refusal}"
+                    )
         # update_quest takes slug/title/status/notes, not the scenario's
         # name/description keys — map them rather than changing the handler.
         registry.execute(

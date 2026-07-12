@@ -28,7 +28,7 @@ def set_scene(
 
 @command("travel")
 def travel(
-    ctx: CommandContext, destination_slug: str, hours: int = 0, days: int = 0, **kwargs
+    ctx: CommandContext, destination_slug: str, hours: int, days: int = 0, **kwargs
 ) -> CommandResult:
     if ctx.store.get_location(destination_slug) is None:
         return refuse("travel", f"unknown location {destination_slug!r}")

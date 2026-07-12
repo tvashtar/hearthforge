@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
+    defeated_status,
     find_combatant,
     turn_order_refusal,
     unknown_combatant_refusal,
@@ -113,6 +114,59 @@ def _hit_rider(desc: str) -> dict:
     return rider
 
 
+def _bonus_damage_riders(action: dict) -> list[dict]:
+    """Unconditional secondary damage entries that auto-resolve at Tier 1.
+
+    SRD lists secondary damage as extra `damage` entries; only those the desc
+    introduces as "plus N (dice) <type> damage" (never save-gated) are applied
+    automatically. Save-gated / conditional extra damage stays DM-adjudicated
+    (surfaced via the on_hit rider)."""
+    desc = action.get("desc", "")
+    riders: list[dict] = []
+    for entry in (action.get("damage") or [])[1:]:
+        dice = entry.get("damage_dice")
+        dtype = (entry.get("damage_type") or {}).get("index")
+        if not dice or not dtype:
+            continue
+        unconditional = re.search(
+            rf"plus\s+\d+\s*\({re.escape(dice)}\)\s+{dtype}\s+damage", desc, re.I
+        )
+        gated = re.search(rf"taking\s+\d+\s*\({re.escape(dice)}\)", desc, re.I) or \
+            re.search(rf"saving throw.{{0,80}}?{re.escape(dice)}", desc, re.I)
+        if unconditional and not gated:
+            riders.append({"damage_notation": dice, "damage_type": dtype})
+    return riders
+
+
+def _rider_if_present(desc: str, *, has_damage: bool) -> dict | None:
+    """Structured rider payload for an attack action. Damage-less attacks
+    always surface their rider (TVA-22). Damaging attacks surface one only
+    when the Hit text carries mechanics beyond the damage roll — a DC or a
+    condition name — so plain weapon attacks stay rider-free (TVA-57). Full
+    auto-resolution of rider damage dice remains DM-adjudicated via
+    roll_dice + dm_ruling."""
+    rider = _hit_rider(desc)
+    if not has_damage:
+        return rider
+    if rider.get("escape_dc") or rider["conditions"] or "DC" in rider["text"]:
+        return rider
+    return None
+
+
+def _attacker_attack_names(ctx: CommandContext, atk: dict) -> list[str]:
+    """The names a combatant could pass as `attack_name`, in storage order.
+
+    Same source each kind resolves against in `_resolve_attack_spec`:
+    a character's stored `attacks`, or a monster's actions that carry an
+    `attack_bonus` (i.e. are actually attacks, not other action types)."""
+    if atk["kind"] == "character":
+        char = ctx.store.get_character_by_id(atk["character_id"])
+        return [s["name"] for s in char["attacks"]]
+    record = ctx.rules.get_monster(atk["monster_slug"])
+    actions = (record.model_extra or {}).get("actions", [])
+    return [a["name"] for a in actions if "attack_bonus" in a]
+
+
 def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> dict | str:
     """Normalize one named attack of a combatant into a spec dict, or return
     a refusal string.
@@ -150,6 +204,7 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
             "long_range_ft": spec.get("long_range_ft"),
             "magical": "magical" in (spec.get("properties") or []),
             "on_hit": None,
+            "bonus_damage": [],
             "is_pc": char["role"] == "pc",
         }
 
@@ -159,6 +214,18 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
         (a for a in actions if (a.get("name") or "").lower() == name_norm), None
     )
     if action is None or "attack_bonus" not in action:
+        # A named stat-block action that just isn't a weapon attack (no
+        # attack_bonus) — e.g. the giant toad's Swallow — gets an actionable
+        # pointer instead of "has no attack named" (TVA-57).
+        if action is not None:
+            first_sentence = re.split(
+                r"(?<=[.!?])\s+", action.get("desc", "").strip(), maxsplit=1
+            )[0]
+            return (
+                f"{action['name']!r} is not a weapon attack — it is a stat-block "
+                f'action: "{first_sentence}" Resolve it via roll_dice + dm_ruling '
+                "(or apply_condition for its conditions)."
+            )
         names = ", ".join(a["name"] for a in actions if "attack_bonus" in a) or "none"
         return f"{atk['name']} has no attack named {attack_name!r} (available: {names})"
     dmg = next(
@@ -189,7 +256,8 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
         "range_ft": range_ft,
         "long_range_ft": long_range_ft,
         "magical": _monster_weapons_are_magical(record),
-        "on_hit": None if dmg else _hit_rider(desc),
+        "on_hit": _rider_if_present(desc, has_damage=dmg is not None),
+        "bonus_damage": _bonus_damage_riders(action),
         "is_pc": False,
     }
 
@@ -270,11 +338,15 @@ def apply_damage_to_target(
         ctx.store.update_resources(cid, death_saves=outcome.state.model_dump())
         died = outcome.state.dead
         frag["target"]["hp"] = 0
-        frag["target"]["status"] = "dead" if died else "dying"
+        if died:
+            status = defeated_status(ctx)
+            ctx.store.update_character(cid, status=status)
+            frag["target"]["status"] = status
+        else:
+            frag["target"]["status"] = "dying"
     elif amount >= hp_before and (amount - hp_before) >= max_hp:
         # Massive overflow: instant death.
-        death_mode = ctx.store.campaign_meta()["death_mode"]
-        status = "dead" if death_mode == "hardcore" else "defeated"
+        status = defeated_status(ctx)
         ctx.store.update_resources(
             cid, hp=0, death_saves=DeathSaveState(dead=True).model_dump()
         )
@@ -376,33 +448,65 @@ def _resolve_swing(
         data["on_hit"] = spec["on_hit"]
         return data
 
-    damage = roll_damage(
-        ctx.roller, spec["damage_notation"], critical=critical,
-        player_value=player_damage_value,
-    )
-    raw = damage.total
-    damage_type = spec["damage_type"]
-    if tgt["kind"] == "monster":
-        record = ctx.rules.get_monster(tgt["monster_slug"])
-        resistances, vulnerabilities, immunities = _monster_defense_sets(
-            record, damage_type, is_magical=spec["magical"]
+    # Roll + per-type mitigate the primary hit and every unconditional rider
+    # (TVA-63, e.g. the giant toad's poison bite) BEFORE touching HP. Each is
+    # mitigated against the target's defenses to ITS OWN damage type; the crit
+    # flag doubles every set of dice (5e RAW: rider dice are part of the
+    # attack).
+    def _mitigate(notation: str, dtype: str, player_value: int | None):
+        rolled = roll_damage(
+            ctx.roller, notation, critical=critical, player_value=player_value
         )
-    else:
-        res = ctx.store.get_resources(tgt["character_id"])
-        petrified = effects_for(res["conditions"], res.get("exhaustion", 0)).resist_all_damage
-        resistances = {damage_type} if petrified else set()
-        vulnerabilities = set()
-        immunities = set()
-    mitigated = apply_mitigation(
-        raw, damage_type,
-        resistances=resistances, vulnerabilities=vulnerabilities, immunities=immunities,
-    )
-    final = mitigated.final
+        if tgt["kind"] == "monster":
+            record = ctx.rules.get_monster(tgt["monster_slug"])
+            res_set, vuln_set, imm_set = _monster_defense_sets(
+                record, dtype, is_magical=spec["magical"]
+            )
+        else:
+            tres = ctx.store.get_resources(tgt["character_id"])
+            petrified = effects_for(
+                tres["conditions"], tres.get("exhaustion", 0)
+            ).resist_all_damage
+            res_set = {dtype} if petrified else set()
+            vuln_set = set()
+            imm_set = set()
+        mit = apply_mitigation(
+            rolled.total, dtype,
+            resistances=res_set, vulnerabilities=vuln_set, immunities=imm_set,
+        )
+        return rolled.total, mit
 
-    fragment = apply_damage_to_target(ctx, tgt["key"], final, damage_type, critical=critical)
+    damage_type = spec["damage_type"]
+    raw, mitigated = _mitigate(spec["damage_notation"], damage_type, player_damage_value)
     data["damage"] = {
-        "raw": raw, "final": final, "type": damage_type, "applied": mitigated.applied,
+        "raw": raw, "final": mitigated.final,
+        "type": damage_type, "applied": mitigated.applied,
     }
+    bonus = []
+    for rider in spec.get("bonus_damage", []):
+        rtype = rider["damage_type"]
+        rraw, rmit = _mitigate(rider["damage_notation"], rtype, None)
+        bonus.append({"raw": rraw, "final": rmit.final,
+                      "type": rtype, "applied": rmit.applied})
+    if bonus:
+        data["bonus_damage"] = bonus
+
+    # One swing is ONE damage event against the target's death/HP state: apply
+    # the COMBINED mitigated total in a single call so the drop-to-0 /
+    # dying-failure / massive-damage logic (and the concentration DC) fire
+    # exactly once, keyed off the swing's single `critical` flag — never once
+    # per damage type (TVA-63 review: separate calls double-counted death-save
+    # failures). Per-type narration above is unaffected. `damage_type` is
+    # unused by apply_damage_to_target (mitigation is already done), so the
+    # primary type is passed as a nominal label.
+    combined = mitigated.final + sum(b["final"] for b in bonus)
+    fragment = apply_damage_to_target(
+        ctx, tgt["key"], combined, damage_type, critical=critical
+    )
+    # A damaging attack can also carry a rider (grapple, condition, save DC);
+    # surface it alongside the damage for the DM to apply (TVA-57).
+    if spec["on_hit"]:
+        data["on_hit"] = spec["on_hit"]
     data["target"] = fragment["target"]
     if "concentration_check" in fragment:
         data["concentration_check"] = fragment["concentration_check"]
@@ -454,9 +558,15 @@ def _swing_digest(attacker: str, target: str, swing: dict) -> str:
             f"({ar['total']} vs AC {ar['target_ac']}) — {effect}"
         )
     dmg = swing["damage"]
+    bonus_tail = ""
+    if swing.get("bonus_damage"):
+        bonus_tail = " " + ", ".join(
+            f"+{b['final']} {b['type']}" for b in swing["bonus_damage"]
+        )
+    rider_tail = " (rider: needs ruling)" if swing.get("on_hit") else ""
     return (
-        f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']} "
-        f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}"
+        f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']}{bonus_tail} "
+        f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}{rider_tail}"
     )
 
 
@@ -523,7 +633,18 @@ def attack(
             )
         names = list(attack_names)
     elif attack_name is None:
-        return refuse("attack", "attack_name (or attack_names) is required")
+        # TVA-58: with exactly one attack there is nothing to disambiguate —
+        # use it instead of making the caller name what's already obvious.
+        available = _attacker_attack_names(ctx, atk)
+        if len(available) == 1:
+            names = available
+        elif available:
+            return refuse(
+                "attack",
+                f"attack_name is required — {attacker} has: {', '.join(available)}",
+            )
+        else:
+            return refuse("attack", "attack_name (or attack_names) is required")
     else:
         names = [attack_name]
 

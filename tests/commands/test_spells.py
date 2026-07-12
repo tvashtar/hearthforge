@@ -2,6 +2,7 @@ import pytest
 
 from dm_engine.commands import registry
 from dm_engine.commands.spells import _heal_notation
+from tests.conftest import kill_kira_via_death_saves
 
 pytestmark = pytest.mark.usefixtures("party")  # Aldric knows cure-wounds, bless, guiding-bolt, sacred-flame, burning-hands (add burning-hands + hold-person to his spells_known in the fixture for these tests)
 
@@ -495,3 +496,103 @@ def test_not_known_refusal_lists_known_spells_when_some_are_known(ctx):
         "cure-wounds, guiding-bolt, hold-person, sacred-flame) — add spells "
         "at character creation, or adjudicate the effect via dm_ruling"
     )
+
+
+def test_healing_revived_pc_rejoins_combat(ctx, party):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    kill_kira_via_death_saves(ctx)
+    kira = ctx.store.get_character("Kira")
+    assert kira["status"] == "defeated"  # narrative mode
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is True
+
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="cure-wounds", targets=["Kira"], spend="none")
+    assert result.ok, result.refusal
+
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] > 0
+    assert "unconscious" not in res["conditions"]
+    assert res["death_saves"] == {
+        "successes": 0, "failures": 0, "stable": False, "dead": False,
+    }
+    assert ctx.store.get_character("Kira")["status"] == "active"
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is False
+
+
+def test_healing_hardcore_dead_pc_is_refused(ctx_hardcore, party_hardcore):
+    ctx = ctx_hardcore
+    kill_kira_via_death_saves(ctx)
+    assert ctx.store.get_character("Kira")["status"] == "dead"  # hardcore mode
+
+    aldric = ctx.store.get_character("Brother Aldric")
+    before = ctx.store.get_resources(aldric["id"])["spell_slots"]["1"]["remaining"]
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="cure-wounds", targets=["Kira"])
+    assert result.ok is False
+    assert "Kira" in result.refusal and "dead" in result.refusal.lower()
+    # The refusal must land before the slot is spent (registry commits
+    # refusals) — and Kira must stay exactly as she died.
+    after = ctx.store.get_resources(aldric["id"])["spell_slots"]["1"]["remaining"]
+    assert after == before
+    kira = ctx.store.get_character("Kira")
+    assert kira["status"] == "dead"
+    assert ctx.store.get_resources(kira["id"])["hp"] == 0
+
+
+# --- TVA-55: cast_spell derives spend from casting time -----------------
+
+
+def _advance_to_turn(ctx, key: str) -> None:
+    """Cycle `next_turn` until it is `key`'s turn (fresh budget for `key`)."""
+    for _ in range(16):
+        combat = ctx.store.combat()
+        if combat["combatants"][combat["turn_index"]]["key"] == key:
+            return
+        result = registry.execute("next_turn", ctx)
+        assert result.ok, result.refusal
+    raise AssertionError(f"never reached {key}'s turn")
+
+
+def test_healing_word_defaults_to_bonus_action(ctx, party):
+    # Combat active, Aldric's turn. Casting healing-word (no spend arg)
+    # should consume the bonus action, not the action — leaving the action
+    # free for a following cantrip cast (no spend arg) in the same turn.
+    _grant_spells(ctx, "Brother Aldric", "healing-word")
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _advance_to_turn(ctx, "Brother Aldric")
+
+    heal = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                            spell_slug="healing-word", targets=["Kira"])
+    assert heal.ok, heal.refusal
+
+    cantrip = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                               spell_slug="sacred-flame", targets=["goblin-1"])
+    assert cantrip.ok, cantrip.refusal
+
+
+def test_explicit_spend_still_overrides(ctx, party):
+    # An explicit spend="action" for healing-word overrides the derived
+    # bonus_action, consuming the action instead — so a following
+    # action-spend cast in the same turn is refused.
+    _grant_spells(ctx, "Brother Aldric", "healing-word")
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _advance_to_turn(ctx, "Brother Aldric")
+
+    heal = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                            spell_slug="healing-word", targets=["Kira"],
+                            spend="action")
+    assert heal.ok, heal.refusal
+
+    cantrip = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                               spell_slug="sacred-flame", targets=["goblin-1"],
+                               spend="action")
+    assert cantrip.ok is False
+    assert "no action remaining" in cantrip.refusal

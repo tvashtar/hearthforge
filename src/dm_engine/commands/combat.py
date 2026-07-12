@@ -539,7 +539,12 @@ def end_combat(ctx: CommandContext, **kwargs) -> CommandResult:
         return refuse("end_combat", "no combat is active")
 
     combatants = combat["combatants"]
-    defeated = [c["key"] for c in combatants if c["defeated"]]
+    defeated_monsters = [
+        c["key"] for c in combatants if c["defeated"] and c["kind"] == "monster"
+    ]
+    downed_party = [
+        c["key"] for c in combatants if c["defeated"] and c["kind"] != "monster"
+    ]
     total = sum(
         c["xp"] for c in combatants if c["kind"] == "monster" and c["defeated"]
     )
@@ -558,10 +563,13 @@ def end_combat(ctx: CommandContext, **kwargs) -> CommandResult:
     )
 
     digest = f"Combat ends — {total} XP awarded ({per_member} each)"
+    if downed_party:
+        digest += f" — {', '.join(downed_party)} defeated"
     return CommandResult(
         ok=True, command="end_combat", digest=digest,
         data={"xp_awarded": total, "per_member": per_member,
-              "recipients": recipients, "defeated": defeated},
+              "recipients": recipients, "defeated": defeated_monsters,
+              "downed_party": downed_party},
     )
 
 

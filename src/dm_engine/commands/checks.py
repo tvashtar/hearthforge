@@ -8,6 +8,12 @@ hp, conditions, character status, and (if a combat is active) combat_state.
 
 from __future__ import annotations
 
+from dm_engine.commands.combatants import (
+    ambiguous_combatant_refusal,
+    defeated_status,
+    find_combatant,
+    set_combatant_defeated,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import SKILL_ABILITIES, normalize_slug
@@ -245,6 +251,96 @@ def tool_check(
     )
 
 
+def _save_result(
+    character: str, ability: str, dc: int, modifier: int, *, auto_fail: bool, check, gm_only: bool
+) -> CommandResult:
+    """Shared data/digest/envelope shape for both the character and monster
+    saving-throw paths, given either an auto-fail (no roll) or a resolved
+    check."""
+    if auto_fail:
+        data = {
+            "ability": ability,
+            "modifier": modifier,
+            "dc": dc,
+            "natural": None,
+            "total": None,
+            "success": False,
+            "margin": None,
+            "auto_fail": True,
+        }
+        digest = f"{character} {ability.upper()} save: automatic failure (condition)"
+    else:
+        data = {
+            "ability": ability,
+            "modifier": modifier,
+            "dc": dc,
+            "natural": check.d20.natural,
+            "total": check.d20.total,
+            "success": check.success,
+            "margin": check.margin,
+            "auto_fail": False,
+        }
+        outcome = "success" if check.success else "failure"
+        digest = f"{character} {ability.upper()} save: {check.d20.total} vs DC {dc} — {outcome}"
+    return CommandResult(
+        ok=True, command="saving_throw", digest=digest, data=data, gm_only=gm_only
+    )
+
+
+def _monster_save_modifier(record, ability: str) -> int:
+    """SRD save-proficiency total if listed (it's the TOTAL modifier, not an
+    add-on), else the bare ability modifier."""
+    proficiencies = (record.model_extra or {}).get("proficiencies", [])
+    for prof in proficiencies:
+        if prof.get("proficiency", {}).get("index") == f"saving-throw-{ability}":
+            return int(prof["value"])
+    return ability_modifier(record.ability_scores[ability])
+
+
+def _monster_saving_throw(
+    ctx: CommandContext,
+    combatant: dict,
+    ability: str,
+    dc: int,
+    *,
+    advantage: bool,
+    disadvantage: bool,
+    player_value: int | None,
+    gm_only: bool,
+) -> CommandResult:
+    character = combatant["key"]
+    if ability not in _ABILITIES:
+        return refuse(
+            "saving_throw", f"unknown ability {ability!r} (valid abilities: {_VALID_ABILITIES})"
+        )
+    if dc < 1:
+        return refuse("saving_throw", f"dc must be >= 1 (got {dc})")
+    if player_value is not None:
+        return refuse(
+            "saving_throw",
+            "player_value is only for the PC's own dice — "
+            "monster saves always roll in the engine",
+        )
+    record = ctx.rules.get_monster(combatant["monster_slug"])
+    if record is None:
+        return refuse("saving_throw", f"no character named {character!r}")
+
+    modifier = _monster_save_modifier(record, ability)
+    effects = effects_for(combatant.get("conditions", []), 0)
+
+    if effects.auto_fail_str_dex_saves and ability in ("str", "dex"):
+        return _save_result(character, ability, dc, modifier, auto_fail=True, check=None,
+                             gm_only=gm_only)
+
+    effective_disadvantage = disadvantage or effects.saves_have_disadvantage or (
+        ability == "dex" and effects.dex_saves_have_disadvantage
+    )
+    mode = combine_advantage(advantage, effective_disadvantage)
+    check = resolve_check(ctx.roller, modifier, dc, mode, player_value=None, gm_only=gm_only)
+    return _save_result(character, ability, dc, modifier, auto_fail=False, check=check,
+                         gm_only=gm_only)
+
+
 @command("saving_throw")
 def saving_throw(
     ctx: CommandContext,
@@ -260,6 +356,19 @@ def saving_throw(
     ability = _normalize_ability(ability)
     char = ctx.store.get_character(character)
     if char is None:
+        combat = ctx.store.combat()
+        if combat["active"]:
+            combatant, ambiguous = find_combatant(combat["combatants"], character)
+            if ambiguous:
+                return refuse(
+                    "saving_throw", ambiguous_combatant_refusal(character, ambiguous)
+                )
+            if combatant is not None and combatant["kind"] == "monster":
+                return _monster_saving_throw(
+                    ctx, combatant, ability, dc,
+                    advantage=advantage, disadvantage=disadvantage,
+                    player_value=player_value, gm_only=gm_only,
+                )
         return refuse("saving_throw", f"no character named {character!r}")
     if ability not in _ABILITIES:
         return refuse(
@@ -279,20 +388,8 @@ def saving_throw(
     effects = effects_for(resources["conditions"], resources.get("exhaustion", 0))
 
     if effects.auto_fail_str_dex_saves and ability in ("str", "dex"):
-        data = {
-            "ability": ability,
-            "modifier": modifier,
-            "dc": dc,
-            "natural": None,
-            "total": None,
-            "success": False,
-            "margin": None,
-            "auto_fail": True,
-        }
-        digest = f"{character} {ability.upper()} save: automatic failure (condition)"
-        return CommandResult(
-            ok=True, command="saving_throw", digest=digest, data=data, gm_only=gm_only
-        )
+        return _save_result(character, ability, dc, modifier, auto_fail=True, check=None,
+                             gm_only=gm_only)
 
     effective_disadvantage = disadvantage or effects.saves_have_disadvantage or (
         ability == "dex" and effects.dex_saves_have_disadvantage
@@ -302,35 +399,12 @@ def saving_throw(
     check = resolve_check(
         ctx.roller, modifier, dc, mode, player_value=player_value, gm_only=gm_only
     )
-    data = {
-        "ability": ability,
-        "modifier": modifier,
-        "dc": dc,
-        "natural": check.d20.natural,
-        "total": check.d20.total,
-        "success": check.success,
-        "margin": check.margin,
-        "auto_fail": False,
-    }
-    outcome = "success" if check.success else "failure"
-    digest = f"{character} {ability.upper()} save: {check.d20.total} vs DC {dc} — {outcome}"
-    return CommandResult(
-        ok=True, command="saving_throw", digest=digest, data=data, gm_only=gm_only
-    )
+    return _save_result(character, ability, dc, modifier, auto_fail=False, check=check,
+                         gm_only=gm_only)
 
 
 def _mark_combatant_defeated(ctx: CommandContext, character: str) -> None:
-    combat = ctx.store.combat()
-    if not combat["active"]:
-        return
-    combatants = combat["combatants"]
-    changed = False
-    for combatant in combatants:
-        if combatant.get("key") == character:
-            combatant["defeated"] = True
-            changed = True
-    if changed:
-        ctx.store.update_combat(combatants=combatants)
+    set_combatant_defeated(ctx, character, True)
 
 
 @command("death_save")
@@ -370,8 +444,7 @@ def death_save(
         conditions = [c for c in resources["conditions"] if c != "unconscious"]
         ctx.store.update_resources(char["id"], hp=1, conditions=conditions)
     elif outcome.state.dead:
-        death_mode = ctx.store.campaign_meta()["death_mode"]
-        new_status = "dead" if death_mode == "hardcore" else "defeated"
+        new_status = defeated_status(ctx)
         ctx.store.update_character(char["id"], status=new_status)
         _mark_combatant_defeated(ctx, character)
         status_note = f" — {character} is {new_status}"
@@ -384,3 +457,52 @@ def death_save(
     }
     digest = f"{character} death save: natural {natural} ({outcome.event}){status_note}"
     return CommandResult(ok=True, command="death_save", digest=digest, data=data)
+
+
+@command("stabilize")
+def stabilize(
+    ctx: CommandContext,
+    character: str,
+    medicine_by: str | None = None,
+    player_value: int | None = None,
+    gm_only: bool = False,
+    **kwargs,
+) -> CommandResult:
+    """Stabilize a dying character: optional Medicine check (DC 10) by
+    `medicine_by`; without a checker it is DM fiat (Spare the Dying etc.)."""
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("stabilize", f"no character named {character!r}")
+    resources = ctx.store.get_resources(char["id"])
+    ds = resources["death_saves"]
+    if resources["hp"] > 0 or ds["stable"] or ds["dead"] or char["status"] != "active":
+        return refuse(
+            "stabilize", f"{character} is not dying (0 hp, not yet stable or dead)"
+        )
+    check_data = None
+    if medicine_by is not None:
+        result = skill_check(
+            ctx, character=medicine_by, skill="medicine", dc=10,
+            player_value=player_value, gm_only=gm_only,
+        )
+        if not result.ok:
+            return refuse("stabilize", result.refusal)
+        check_data = result.data
+        if not check_data["success"]:
+            digest = (
+                f"{medicine_by} fails to stabilize {character} "
+                f"(Medicine {check_data['total']} vs DC 10)"
+            )
+            return CommandResult(
+                ok=True, command="stabilize", digest=digest,
+                data={"stabilized": False, "check": check_data}, gm_only=gm_only,
+            )
+    ctx.store.update_resources(
+        char["id"], death_saves=DeathSaveState(stable=True).model_dump()
+    )
+    by = f" by {medicine_by}" if medicine_by else ""
+    digest = f"{character} is stabilized{by} — 0 HP, unconscious, no longer dying"
+    return CommandResult(
+        ok=True, command="stabilize", digest=digest,
+        data={"stabilized": True, "check": check_data}, gm_only=gm_only,
+    )

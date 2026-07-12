@@ -41,6 +41,7 @@ from dm_engine.commands.attacks import (
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
     find_combatant,
+    set_combatant_defeated,
     unknown_combatant_refusal,
 )
 from dm_engine.commands.effects import (
@@ -162,9 +163,14 @@ def _apply_healing(ctx: CommandContext, key: str, amount: int) -> dict | None:
     """Heal `amount` to a character (by combatant key or name), capped at max.
 
     Healing a character at 0 HP revives it: fresh death saves, `unconscious`
-    dropped, HP set to the healed amount (capped). Returns a per-target
-    fragment (`healed` is the rolled amount, `hp` the resulting total) or None
-    if no such character exists.
+    dropped, HP set to the healed amount (capped). If the kill already
+    resolved (TVA-51's dying path stamps `characters.status` "defeated"),
+    revival also clears that status back to "active" and un-defeats the
+    combatant tracker entry so the character can act again this combat
+    (TVA-52). A hardcore "dead" status is not touched here — callers must
+    refuse a dead target before calling this (see `cast_spell` step 4).
+    Returns a per-target fragment (`healed` is the rolled amount, `hp` the
+    resulting total) or None if no such character exists.
     """
     cid = _heal_target_cid(ctx, key)
     if cid is None:
@@ -182,6 +188,9 @@ def _apply_healing(ctx: CommandContext, key: str, amount: int) -> dict | None:
             cid, hp=new_hp, conditions=conditions,
             death_saves=DeathSaveState().model_dump(),
         )
+        if char_row["status"] == "defeated":
+            ctx.store.update_character(cid, status="active")
+        set_combatant_defeated(ctx, char_row["name"], False)
     else:
         new_hp = min(max_hp, hp_before + amount)
         ctx.store.update_resources(cid, hp=new_hp)
@@ -241,13 +250,20 @@ def cast_spell(
     slot_level: int | None = None,
     targets: list[str] = [],  # noqa: B006 (frozen contract; never mutated)
     band: str | None = None,
-    spend: str = "action",
+    spend: str | None = None,
     ritual: bool = False,
     player_attack_value: int | None = None,
     player_damage_value: int | None = None,
     player_save_values: dict[str, int] | None = None,
     **kwargs,
 ) -> CommandResult:
+    """Cast `spell_slug` as `caster`, resolving Tier 1 spells fully.
+
+    `spend` (default: derived from the spell's casting time — "bonus
+    action" maps to bonus_action, "reaction" to reaction, everything else
+    to action) may still be passed explicitly to override the derived
+    value; `"none"` skips action-economy checks entirely.
+    """
     # Step 1: existence and knowledge.
     char = ctx.store.get_character(caster)
     if char is None:
@@ -255,6 +271,14 @@ def cast_spell(
     record = ctx.rules.get_spell(spell_slug)
     if record is None:
         return refuse("cast_spell", f"unknown spell {spell_slug!r}")
+    if spend is None:
+        ct = record.casting_time.lower()
+        if "bonus action" in ct:
+            spend = "bonus_action"
+        elif "reaction" in ct:
+            spend = "reaction"
+        else:
+            spend = "action"
     if spell_slug not in char["spells_known"]:
         known = ", ".join(sorted(char["spells_known"])) if char["spells_known"] else "none"
         return refuse(
@@ -364,8 +388,12 @@ def cast_spell(
             return refuse("cast_spell", f"{record.name} needs a target to heal")
         if extra["heal_at_slot_level"].get(str(slot_level)) is None:
             return refuse("cast_spell", f"{record.name} has no healing at that slot")
-        if _heal_target_cid(ctx, targets[0]) is None:
+        heal_cid = _heal_target_cid(ctx, targets[0])
+        if heal_cid is None:
             return refuse("cast_spell", f"no character named {targets[0]!r} to heal")
+        target_row = ctx.store.get_character_by_id(heal_cid)
+        if target_row["status"] == "dead":
+            return refuse("cast_spell", f"{target_row['name']} is dead")
     elif _is_tier1_damage(extra):
         if _damage_notation(extra, slot_level, char["level"]) is None:
             return refuse("cast_spell", f"{record.name} has no damage at that level")

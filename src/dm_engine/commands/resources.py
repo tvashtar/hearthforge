@@ -163,6 +163,12 @@ def use_item(
     char = ctx.store.get_character(character)
     if char is None:
         return refuse("use_item", f"no character named {character!r}")
+    # The healing path self-targets: a hardcore-dead character must refuse
+    # here, before the item charge is consumed (the registry commits
+    # refusals) — same guard as cast_spell's heal-target validation, or a
+    # dead PC could end up status="dead" with hp > 0.
+    if heal is not None and char["status"] == "dead":
+        return refuse("use_item", f"{char['name']} is dead")
     if not ctx.store.remove_item(char["id"], item, 1):
         return refuse("use_item", f"{character} is not holding {item!r}")
 

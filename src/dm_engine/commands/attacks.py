@@ -114,6 +114,30 @@ def _hit_rider(desc: str) -> dict:
     return rider
 
 
+def _bonus_damage_riders(action: dict) -> list[dict]:
+    """Unconditional secondary damage entries that auto-resolve at Tier 1.
+
+    SRD lists secondary damage as extra `damage` entries; only those the desc
+    introduces as "plus N (dice) <type> damage" (never save-gated) are applied
+    automatically. Save-gated / conditional extra damage stays DM-adjudicated
+    (surfaced via the on_hit rider)."""
+    desc = action.get("desc", "")
+    riders: list[dict] = []
+    for entry in (action.get("damage") or [])[1:]:
+        dice = entry.get("damage_dice")
+        dtype = (entry.get("damage_type") or {}).get("index")
+        if not dice or not dtype:
+            continue
+        unconditional = re.search(
+            rf"plus\s+\d+\s*\({re.escape(dice)}\)\s+{dtype}\s+damage", desc, re.I
+        )
+        gated = re.search(rf"taking\s+\d+\s*\({re.escape(dice)}\)", desc, re.I) or \
+            re.search(rf"saving throw.{{0,80}}?{re.escape(dice)}", desc, re.I)
+        if unconditional and not gated:
+            riders.append({"damage_notation": dice, "damage_type": dtype})
+    return riders
+
+
 def _rider_if_present(desc: str, *, has_damage: bool) -> dict | None:
     """Structured rider payload for an attack action. Damage-less attacks
     always surface their rider (TVA-22). Damaging attacks surface one only
@@ -180,6 +204,7 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
             "long_range_ft": spec.get("long_range_ft"),
             "magical": "magical" in (spec.get("properties") or []),
             "on_hit": None,
+            "bonus_damage": [],
             "is_pc": char["role"] == "pc",
         }
 
@@ -232,6 +257,7 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
         "long_range_ft": long_range_ft,
         "magical": _monster_weapons_are_magical(record),
         "on_hit": _rider_if_present(desc, has_damage=dmg is not None),
+        "bonus_damage": _bonus_damage_riders(action),
         "is_pc": False,
     }
 

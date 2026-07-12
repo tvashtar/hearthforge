@@ -1,6 +1,8 @@
 import pytest
 
 from dm_engine.commands import registry
+from dm_engine.commands.attacks import _bonus_damage_riders
+from dm_engine.content.lookup import RulesDB
 
 pytestmark = pytest.mark.usefixtures("party")
 
@@ -818,6 +820,43 @@ def test_plain_damage_attack_has_no_on_hit(ctx):
     assert hit.data["damage"] is not None
     assert hit.data["damage"]["type"] == "slashing"
     assert hit.data.get("on_hit") is None
+
+
+def _monster_action(rules_path, slug, action_name):
+    record = RulesDB(rules_path).get_monster(slug)
+    actions = record.model_extra["actions"]
+    return next(a for a in actions if a["name"].lower() == action_name.lower())
+
+
+def test_bonus_damage_riders_parses_unconditional_secondary(rules_path):
+    """SRD secondary damage introduced as "plus N (dice) <type> damage" auto-
+    resolves at Tier 1 (TVA-63): giant-toad's poison bite, the dragon's fire
+    bite, and the ankheg's acid bite all carry an unconditional rider."""
+    action = _monster_action(rules_path, "giant-toad", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "1d10", "damage_type": "poison"}
+    ]
+
+    action = _monster_action(rules_path, "adult-red-dragon", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "2d6", "damage_type": "fire"}
+    ]
+
+    action = _monster_action(rules_path, "ankheg", "Bite")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "1d6", "damage_type": "acid"}
+    ]
+
+
+def test_bonus_damage_riders_excludes_save_gated(rules_path):
+    """Save-gated secondary damage ("taking ... on a failed save") stays
+    DM-adjudicated, not auto-applied: the assassin's poison and the
+    aboleth's acid both require a saving throw, so neither is a rider."""
+    action = _monster_action(rules_path, "assassin", "Shortsword")
+    assert _bonus_damage_riders(action) == []
+
+    action = _monster_action(rules_path, "aboleth", "Tentacle")
+    assert _bonus_damage_riders(action) == []
 
 
 def test_non_attack_action_refusal_names_the_action(ctx):

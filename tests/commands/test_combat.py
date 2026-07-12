@@ -709,6 +709,53 @@ def test_end_combat_includes_encounter_xp_accumulator(ctx):
     assert _last_event(ctx, "end_combat")
 
 
+def test_end_combat_separates_downed_party_from_defeated_monsters(ctx):
+    """TVA-51: end_combat's `defeated` list must stay monster-only (it drives
+    XP), with a separate `downed_party` list for defeated PCs/companions —
+    and the digest must call out a downed party member distinctly from a
+    slain monster."""
+    _start(ctx)
+    combat = ctx.store.combat()
+    for c in combat["combatants"]:
+        if c["key"] == "goblin-1":
+            c["defeated"] = True
+        if c["key"] == "Brother Aldric":
+            c["defeated"] = True
+    ctx.store.update_combat(combatants=combat["combatants"])
+    ctx.store.conn.commit()
+    result = registry.execute("end_combat", ctx)
+    assert result.ok, result.refusal
+    assert result.data["defeated"] == ["goblin-1"]
+    assert result.data["downed_party"] == ["Brother Aldric"]
+    assert "Brother Aldric defeated" in result.digest
+
+
+def test_end_combat_excludes_defeated_pc_from_xp_division(ctx):
+    """A PC/companion marked 'defeated' (the status TVA-51's dying-path fix
+    now writes) must not share in the XP split — award_party_xp already
+    filters on status == 'active'; this locks that behavior at the
+    end_combat integration boundary."""
+    _start(ctx)
+    kira = ctx.store.get_character("Kira")
+    aldric_xp_before = ctx.store.get_character("Brother Aldric")["xp"]
+    ctx.store.update_character(kira["id"], status="defeated")
+    ctx.store.conn.commit()
+    combat = ctx.store.combat()
+    for c in combat["combatants"]:
+        if c["kind"] == "monster":
+            c["defeated"] = True
+    ctx.store.update_combat(combatants=combat["combatants"])
+    ctx.store.conn.commit()
+    result = registry.execute("end_combat", ctx)
+    assert result.ok, result.refusal
+    assert result.data["xp_awarded"] == 100  # 2 goblins x 50
+    names = {r["name"] for r in result.data["recipients"]}
+    assert names == {"Brother Aldric"}  # the whole 100, not split with defeated Kira
+    assert ctx.store.get_character("Brother Aldric")["xp"] == aldric_xp_before + 100
+    assert ctx.store.get_character("Kira")["xp"] == 0
+    assert ctx.store.get_character("Kira")["xp"] == 0
+
+
 # --- get_scene_state -------------------------------------------------------
 
 def test_scene_state_without_combat(ctx):

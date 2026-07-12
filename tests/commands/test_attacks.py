@@ -103,6 +103,79 @@ def test_monster_attack_drops_pc_to_dying(ctx, combat):
     assert res["death_saves"]["failures"] == 0
 
 
+def _set_dying(ctx, name="Kira", failures=1):
+    """Put `name` at 0 hp, unconscious, mid-death-saves (one failure already
+    recorded) — the state `apply_damage_to_target`'s hp_before == 0 branch
+    expects on entry."""
+    char = ctx.store.get_character(name)
+    ctx.store.update_resources(
+        char["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": failures, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    return char
+
+
+def _start_goblin_engaged_with(ctx, target_key="Kira"):
+    """Start a one-goblin combat with the goblin engaged in melee with
+    `target_key`, and give the goblin the current turn."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == target_key:
+            c["band"] = "engaged"; c["engaged_with"] = ["goblin-1"]
+        if c["key"] == "goblin-1":
+            c["band"] = "engaged"; c["engaged_with"] = [target_key]
+    ctx.store.update_combat(combatants=combatants); ctx.store.conn.commit()
+    _force_turn(ctx, "goblin-1", band="engaged", engaged_with=[target_key])
+
+
+def test_damage_while_dying_kill_maps_to_defeated_in_narrative(ctx, party):
+    """TVA-51: a killing blow landed while already dying (hp_before == 0)
+    must honor death_mode, not hardcode 'dead'. Kira is unconscious and
+    dying (engaged melee vs. an unconscious target auto-crits per SRD, so
+    one hit adds two death-save failures — enough to push her 1 existing
+    failure to 3 and kill her)."""
+    _set_dying(ctx, "Kira", failures=1)
+    _start_goblin_engaged_with(ctx, "Kira")
+    result = None
+    for _ in range(20):
+        result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                                  attack_name="Scimitar", spend="none")
+        if result.ok and result.data["hit"]:
+            break
+    assert result is not None and result.ok and result.data["hit"], "no hit landed (seeded)"
+    assert result.data["critical"] is True  # unconscious + engaged => auto-crit
+    assert result.data["target"]["status"] == "defeated"
+    assert "Kira is defeated" in result.digest
+    assert ctx.store.get_character("Kira")["status"] == "defeated"
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is True
+
+
+def test_damage_while_dying_kill_maps_to_dead_in_hardcore(ctx_hardcore, party_hardcore):
+    """Same script on a hardcore campaign: the kill maps to 'dead', not
+    'defeated'."""
+    ctx = ctx_hardcore
+    _set_dying(ctx, "Kira", failures=1)
+    _start_goblin_engaged_with(ctx, "Kira")
+    result = None
+    for _ in range(20):
+        result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                                  attack_name="Scimitar", spend="none")
+        if result.ok and result.data["hit"]:
+            break
+    assert result is not None and result.ok and result.data["hit"], "no hit landed (seeded)"
+    assert result.data["critical"] is True
+    assert result.data["target"]["status"] == "dead"
+    assert "Kira is dead" in result.digest
+    assert ctx.store.get_character("Kira")["status"] == "dead"
+    kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
+    assert kira_c["defeated"] is True
+
+
 def test_apply_condition_validates_and_breaks_concentration(ctx):
     aldric = ctx.store.get_character("Brother Aldric")
     ctx.store.conn.execute(

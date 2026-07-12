@@ -270,7 +270,13 @@ def apply_damage_to_target(
         ctx.store.update_resources(cid, death_saves=outcome.state.model_dump())
         died = outcome.state.dead
         frag["target"]["hp"] = 0
-        frag["target"]["status"] = "dead" if died else "dying"
+        if died:
+            death_mode = ctx.store.campaign_meta()["death_mode"]
+            status = "dead" if death_mode == "hardcore" else "defeated"
+            ctx.store.update_character(cid, status=status)
+            frag["target"]["status"] = status
+        else:
+            frag["target"]["status"] = "dying"
     elif amount >= hp_before and (amount - hp_before) >= max_hp:
         # Massive overflow: instant death.
         death_mode = ctx.store.campaign_meta()["death_mode"]

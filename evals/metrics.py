@@ -79,6 +79,17 @@ def classify_beat_failure(db_path: Path, done_when: dict, *, after_id: int) -> d
 
     Callers add the "timeout" reason themselves for the turn/run-timeout
     paths, which abort before a beat can be classified this way.
+
+    INVARIANT: this deliberately does NOT re-apply done_when's matchers — it
+    only splits "command never ran" from "command ran but the beat is still
+    unmet". It is therefore only correct when called after beat_done has
+    already returned False for the same after_id/done_when (the sole caller,
+    evals/runner.py, does exactly this). Consequence for a would-be new
+    caller: the "refused" branch surfaces the last matching-command row's
+    refusal-or-digest, so if a beat failed only an inputs/result matcher
+    (not on ok), that last row may be an ok=True row and this returns its
+    digest, not a refusal. That is intentional triage output under the
+    caller invariant — do not call this standalone and trust `reason` blindly.
     """
     with _connect(db_path) as db:
         rows = db.execute(

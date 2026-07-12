@@ -12,6 +12,8 @@ player_persona: >
   you; if the notes give no number, say "roll for me" to delegate to the DM.
   Never narrate outcomes yourself; state intent and let the DM resolve it.
 pc_name: Kira
+start_day: 1
+start_time: "18:00"
 party:
   - name: Kira
     role: pc

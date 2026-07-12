@@ -18,6 +18,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from dm_engine.commands.combatants import (
+    ambiguous_combatant_refusal,
+    find_combatant,
+    unknown_combatant_refusal,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
 from dm_engine.rules.active_effects import validate_mechanics
@@ -75,11 +80,14 @@ def _effect_name_matches(effect: dict, name: str) -> bool:
 
 def _resolve_target(ctx: CommandContext, target: str):
     """Return ("monster", combatant, None) | ("character", char, combatant|None)
-    | ("unknown", None, None). A live combatant key wins over a character
-    name (attacks.py's condition-target resolution pattern)."""
+    | ("unknown", None, None) | ("ambiguous", matches, None). A live combatant
+    (key or display name, case-insensitive) wins over a character name
+    (attacks.py's condition-target resolution shares this pattern)."""
     combat = ctx.store.combat()
     if combat["active"]:
-        combatant = next((c for c in combat["combatants"] if c["key"] == target), None)
+        combatant, ambiguous = find_combatant(combat["combatants"], target)
+        if ambiguous:
+            return "ambiguous", ambiguous, None
         if combatant is not None:
             if combatant["kind"] == "monster":
                 return "monster", combatant, None
@@ -89,6 +97,14 @@ def _resolve_target(ctx: CommandContext, target: str):
     if char is not None:
         return "character", char, None
     return "unknown", None, None
+
+
+def _target_refusal(ctx: CommandContext, target: str, rkind: str, first) -> str:
+    """The refusal text for an unresolved/ambiguous op target."""
+    if rkind == "ambiguous":
+        return ambiguous_combatant_refusal(target, first)
+    combatants = ctx.store.combat()["combatants"] if ctx.store.combat()["active"] else []
+    return unknown_combatant_refusal("target", target, combatants)
 
 
 def _validate_op(ctx: CommandContext, op: Any) -> str | None:
@@ -112,9 +128,9 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return "adjust_hp requires a target"
         if not isinstance(delta, int):
             return "adjust_hp requires an integer delta"
-        rkind, _, _ = _resolve_target(ctx, target)
-        if rkind == "unknown":
-            return f"unknown target {target!r}"
+        rkind, first, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, first)
         return None
 
     if kind in ("set_condition", "clear_condition"):
@@ -126,9 +142,9 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
                 f"unknown condition {condition!r} "
                 f"(valid conditions: {', '.join(sorted(CONDITIONS))})"
             )
-        rkind, _, _ = _resolve_target(ctx, target)
-        if rkind == "unknown":
-            return f"unknown target {target!r}"
+        rkind, first, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, first)
         return None
 
     if kind == "adjust_slot":
@@ -155,9 +171,9 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return "set_exhaustion requires a target"
         if not isinstance(level, int) or isinstance(level, bool) or not 0 <= level <= 6:
             return "set_exhaustion requires an integer level between 0 and 6"
-        rkind, _, _ = _resolve_target(ctx, target)
-        if rkind == "unknown":
-            return f"unknown target {target!r}"
+        rkind, first, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, first)
         if rkind == "monster":
             return f"{target} is a monster; exhaustion tracks on characters only"
         return None
@@ -178,9 +194,9 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return "apply_effect requires a target"
         if not isinstance(name, str) or not name.strip():
             return "apply_effect requires a non-empty effect name"
-        rkind, _, _ = _resolve_target(ctx, target)
-        if rkind == "unknown":
-            return f"unknown target {target!r}"
+        rkind, first, _ = _resolve_target(ctx, target)
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, first)
         if rkind == "monster":
             return f"{target} is a monster; active effects track on characters only"
         reason = validate_mechanics(op.get("mechanics", {}))
@@ -212,8 +228,8 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         if not isinstance(name, str) or not name.strip():
             return "end_effect requires a non-empty effect name"
         rkind, char, _ = _resolve_target(ctx, target)
-        if rkind == "unknown":
-            return f"unknown target {target!r}"
+        if rkind in ("unknown", "ambiguous"):
+            return _target_refusal(ctx, target, rkind, char)
         if rkind == "monster":
             return f"{target} is a monster; active effects track on characters only"
         effects = ctx.store.active_effects_for(char["id"])
@@ -237,15 +253,18 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
         target, delta = op["target"], op["delta"]
         rkind, char, _ = _resolve_target(ctx, target)
         if rkind == "monster":
+            # `target` may be a display name; resolve to the canonical key
+            # once so the combatant lookup below can't miss.
+            key = char["key"]
             combatants = ctx.store.combat()["combatants"]
-            live = next(c for c in combatants if c["key"] == target)
+            live = next(c for c in combatants if c["key"] == key)
             hp = max(0, live["hp"] + delta)
             live["hp"] = hp
             if hp == 0:
                 live["defeated"] = True
                 for other in combatants:
                     other["engaged_with"] = [
-                        k for k in other["engaged_with"] if k != target
+                        k for k in other["engaged_with"] if k != key
                     ]
             ctx.store.update_combat(combatants=combatants)
             return {"op": "adjust_hp", "target": target, "delta": delta, "hp": hp}
@@ -259,8 +278,9 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
         rkind, char, _ = _resolve_target(ctx, target)
         adding = kind == "set_condition"
         if rkind == "monster":
+            key = char["key"]
             combatants = ctx.store.combat()["combatants"]
-            live = next(c for c in combatants if c["key"] == target)
+            live = next(c for c in combatants if c["key"] == key)
             conditions = list(live["conditions"])
             if adding and condition not in conditions:
                 conditions.append(condition)

@@ -38,6 +38,11 @@ from dm_engine.commands.attacks import (
     _monster_defense_sets,
     apply_damage_to_target,
 )
+from dm_engine.commands.combatants import (
+    ambiguous_combatant_refusal,
+    find_combatant,
+    unknown_combatant_refusal,
+)
 from dm_engine.commands.effects import (
     clear_concentration_effects,
     effective_ac_for_combatant,
@@ -90,6 +95,19 @@ def _dart_count(spec: dict, base_level: int, slot_level: int | None) -> int:
     return spec["darts"] + spec["per_upcast"] * ((slot_level or base_level) - base_level)
 
 
+def _find_combat_target(combatants, identifier):
+    """Resolve one spell target against the live combatants — key OR display
+    name, case-insensitively (TVA-38, the shared `attack` resolution) — or
+    return an error string to refuse with: ambiguity lists the candidates,
+    an unknown identifier lists the live roster."""
+    tc, ambiguous = find_combatant(combatants, identifier)
+    if ambiguous:
+        return ambiguous_combatant_refusal(identifier, ambiguous)
+    if tc is None:
+        return unknown_combatant_refusal("target", identifier, combatants)
+    return tc
+
+
 def _assign_darts(combatants, targets, count, spell_name):
     """Resolve one combatant dict per dart, or an error string to refuse with.
 
@@ -109,9 +127,9 @@ def _assign_darts(combatants, targets, count, spell_name):
         )
     chosen = []
     for key in keys:
-        tc = next((c for c in combatants if c["key"] == key), None)
-        if tc is None:
-            return f"{key!r} is not a combatant to target"
+        tc = _find_combat_target(combatants, key)
+        if isinstance(tc, str):
+            return tc
         chosen.append(tc)
     return chosen
 
@@ -123,12 +141,9 @@ def _heal_target_cid(ctx: CommandContext, key: str) -> int | None:
     can validate a heal target before consuming any state."""
     combat = ctx.store.combat()
     if combat["active"]:
-        combatant = next(
-            (c for c in combat["combatants"]
-             if c["key"] == key and c["kind"] == "character"),
-            None,
-        )
-        if combatant is not None:
+        characters = [c for c in combat["combatants"] if c["kind"] == "character"]
+        combatant, ambiguous = find_combatant(characters, key)
+        if combatant is not None and ambiguous is None:
             return combatant["character_id"]
     char = ctx.store.get_character(key)
     return char["id"] if char is not None else None
@@ -170,7 +185,9 @@ def _apply_healing(ctx: CommandContext, key: str, amount: int) -> dict | None:
     else:
         new_hp = min(max_hp, hp_before + amount)
         ctx.store.update_resources(cid, hp=new_hp)
-    return {"key": key, "healed": amount, "hp": new_hp}
+    # Echo the canonical character name: `key` may have been a differently-
+    # cased alias (TVA-38's forgiving resolution).
+    return {"key": char_row["name"], "healed": amount, "hp": new_hp}
 
 
 def _save_modifier(ctx: CommandContext, combatant: dict, ability: str) -> int:
@@ -361,10 +378,9 @@ def cast_spell(
         elif extra.get("attack_type"):
             if not targets:
                 return refuse("cast_spell", f"{record.name} needs a target")
-            if not any(c["key"] == targets[0] for c in combatants):
-                return refuse(
-                    "cast_spell", f"{targets[0]!r} is not a combatant to target"
-                )
+            resolved = _find_combat_target(combatants, targets[0])
+            if isinstance(resolved, str):
+                return refuse("cast_spell", resolved)
         else:
             resolved = _select_save_targets(combatants, targets, band, extra)
             if isinstance(resolved, str):
@@ -544,16 +560,18 @@ def _resolve_damage(
     if extra.get("attack_type"):
         if not targets:
             return refuse("cast_spell", f"{record.name} needs a target")
-        tgt = next((c for c in combatants if c["key"] == targets[0]), None)
-        if tgt is None:
-            return refuse("cast_spell", f"{targets[0]!r} is not a combatant to target")
+        tgt = _find_combat_target(combatants, targets[0])
+        if isinstance(tgt, str):
+            return refuse("cast_spell", tgt)
+        # Canonical key: `targets[0]` may have been a display name.
+        target_key = tgt["key"]
         pv = player_attack_value if is_pc else None
         caster_c = next((c for c in combatants if c["key"] == caster), None)
         if caster_c is not None:
             interaction = attack_interaction(
                 _effects_for_combatant(ctx, caster_c),
                 _effects_for_combatant(ctx, tgt),
-                engaged=targets[0] in caster_c["engaged_with"],
+                engaged=target_key in caster_c["engaged_with"],
             )
             mode = combine_advantage(
                 interaction.mode == "advantage", interaction.mode == "disadvantage"
@@ -572,9 +590,9 @@ def _resolve_damage(
             },
         }
         if not roll.hit:
-            data["per_target"] = [{"key": targets[0], "hit": False, "damage": 0}]
+            data["per_target"] = [{"key": target_key, "hit": False, "damage": 0}]
             digest = (
-                f"{caster} casts {record.name} but misses {targets[0]} "
+                f"{caster} casts {record.name} but misses {target_key} "
                 f"({roll.d20.total} vs AC {target_ac})"
             )
             return CommandResult(ok=True, command="cast_spell", digest=digest, data=data)
@@ -584,17 +602,17 @@ def _resolve_damage(
         )
         final = _mitigate(ctx, tgt, dmg.total, damage_type)
         frag = apply_damage_to_target(
-            ctx, targets[0], final, damage_type, critical=roll.critical_hit
+            ctx, target_key, final, damage_type, critical=roll.critical_hit
         )
         entry = {
-            "key": targets[0], "hit": True, "critical": roll.critical_hit,
+            "key": target_key, "hit": True, "critical": roll.critical_hit,
             "damage_rolled": dmg.total, "damage": final, **frag["target"],
         }
         data["per_target"] = [entry]
         _copy_concentration_flags(frag, data)
         verb = "crits" if roll.critical_hit else "hits"
         digest = (
-            f"{caster} casts {record.name} and {verb} {targets[0]} for "
+            f"{caster} casts {record.name} and {verb} {target_key} for "
             f"{final} {damage_type}"
         )
         return CommandResult(ok=True, command="cast_spell", digest=digest, data=data)
@@ -660,11 +678,11 @@ def _select_save_targets(combatants, targets, band, extra):
     if targets:
         chosen = []
         for key in targets:
-            tc = next((c for c in combatants if c["key"] == key), None)
-            if tc is None:
-                return f"{key!r} is not a combatant to target"
+            tc = _find_combat_target(combatants, key)
+            if isinstance(tc, str):
+                return tc
             if band is not None and tc["band"] != band:
-                return f"{key} is not in band {band!r}"
+                return f"{tc['key']} is not in band {band!r}"
             chosen.append(tc)
         if len(chosen) > max_targets:
             return f"too many targets ({len(chosen)} > {max_targets})"

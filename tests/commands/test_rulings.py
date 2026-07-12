@@ -82,6 +82,37 @@ def test_ruling_adjust_hp_defeats_monster_at_zero(ctx):
     assert combatant["hp"] == 0 and combatant["defeated"] is True
 
 
+def test_ruling_adjust_hp_matches_combatant_display_name_case_insensitively(ctx):
+    # TVA-38: dm_ruling ops share the same combatant-identifier resolution
+    # as attack/apply_condition — a labeled monster resolves by name too.
+    registry.execute(
+        "start_combat", ctx,
+        monsters=[{"slug": "goblin", "count": 1, "band": "near", "label": "Fen Scout"}],
+        pc_initiative=15,
+    )
+    result = registry.execute(
+        "dm_ruling", ctx, description="Rockfall crushes the goblin",
+        rationale="environmental hazard",
+        effects=[{"op": "adjust_hp", "target": "fen scout", "delta": -999}],
+    )
+    assert result.ok, result.refusal
+    combatant = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "goblin-1")
+    assert combatant["hp"] == 0 and combatant["defeated"] is True
+
+
+def test_ruling_adjust_hp_unknown_target_lists_combatants(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    result = registry.execute(
+        "dm_ruling", ctx, description="Rockfall", rationale="testing",
+        effects=[{"op": "adjust_hp", "target": "Bandit 3", "delta": -5}],
+    )
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert "Kira" in result.refusal
+
+
 def test_ruling_set_exhaustion_refuses_for_monster_target(ctx):
     registry.execute("start_combat", ctx,
                      monsters=[{"slug": "goblin", "count": 1, "band": "near"}],

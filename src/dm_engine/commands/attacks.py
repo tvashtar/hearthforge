@@ -20,6 +20,12 @@ import re
 
 from pydantic import ValidationError
 
+from dm_engine.commands.combatants import (
+    ambiguous_combatant_refusal,
+    find_combatant,
+    turn_order_refusal,
+    unknown_combatant_refusal,
+)
 from dm_engine.commands.effects import (
     clear_concentration_effects,
     effective_ac_for_combatant,
@@ -115,9 +121,12 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
     pure rider text (no damage dice, e.g. the rug's Smother) resolves with
     `damage_notation=None` plus a structured `on_hit` rider (TVA-22).
     """
+    name_norm = attack_name.strip().lower()
     if atk["kind"] == "character":
         char = ctx.store.get_character_by_id(atk["character_id"])
-        spec = next((s for s in char["attacks"] if s["name"] == attack_name), None)
+        spec = next(
+            (s for s in char["attacks"] if s["name"].lower() == name_norm), None
+        )
         if spec is None:
             names = ", ".join(s["name"] for s in char["attacks"]) or "none"
             return (
@@ -146,7 +155,9 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
 
     record = ctx.rules.get_monster(atk["monster_slug"])
     actions = (record.model_extra or {}).get("actions", [])
-    action = next((a for a in actions if a.get("name") == attack_name), None)
+    action = next(
+        (a for a in actions if (a.get("name") or "").lower() == name_norm), None
+    )
     if action is None or "attack_bonus" not in action:
         names = ", ".join(a["name"] for a in actions if "attack_bonus" in a) or "none"
         return f"{atk['name']} has no attack named {attack_name!r} (available: {names})"
@@ -402,6 +413,21 @@ def _resolve_swing(
     return data
 
 
+def _reach_hint(dist: str, ranged: bool) -> str:
+    """The actionable fix for an out-of-range attack (TVA-39).
+
+    `engage` jumps straight to the target's band, spending the full distance
+    as movement in one go — affordable (and worth suggesting) only for the
+    near->engaged step a melee weapon needs. Farther bands would routinely
+    cost more movement than a turn grants, and a ranged attack closing to
+    melee defeats its own point, so both instead get the general "move"
+    suggestion, which is never a wrong thing to try.
+    """
+    if not ranged and dist == "near":
+        return " — call engage to close to melee, or move"
+    return " — move closer to get in range"
+
+
 def _drop_tail(target: str, swing: dict) -> str:
     """Digest suffix for a swing that dropped its target, or ''."""
     status = swing["target"].get("status")
@@ -454,12 +480,20 @@ def attack(
     if not combat["active"]:
         return refuse("attack", "no combat is active")
     combatants = combat["combatants"]
-    atk = next((c for c in combatants if c["key"] == attacker), None)
-    tgt = next((c for c in combatants if c["key"] == target), None)
+    atk, atk_ambiguous = find_combatant(combatants, attacker)
+    if atk_ambiguous:
+        return refuse("attack", ambiguous_combatant_refusal(attacker, atk_ambiguous))
     if atk is None:
-        return refuse("attack", f"unknown attacker {attacker!r}")
+        return refuse("attack", unknown_combatant_refusal("attacker", attacker, combatants))
+    tgt, tgt_ambiguous = find_combatant(combatants, target)
+    if tgt_ambiguous:
+        return refuse("attack", ambiguous_combatant_refusal(target, tgt_ambiguous))
     if tgt is None:
-        return refuse("attack", f"unknown target {target!r}")
+        return refuse("attack", unknown_combatant_refusal("target", target, combatants))
+    # Normalize to canonical keys: everything below (turn/budget checks,
+    # engaged_with membership, digests) compares against `key`.
+    attacker = atk["key"]
+    target = tgt["key"]
     if atk["defeated"]:
         return refuse("attack", f"{attacker} is defeated and cannot act")
     if tgt["defeated"]:
@@ -503,7 +537,11 @@ def attack(
     use_reaction_flag = False
     if spend == "action":
         if not is_turn:
-            return refuse("attack", f"it is not {attacker}'s turn (action requires your turn)")
+            return refuse(
+                "attack",
+                f"{turn_order_refusal(combatants, idx, attacker)} "
+                "(action requires your turn)",
+            )
         if budget is None or not budget.action_available:
             return refuse("attack", f"{attacker} has no action remaining this turn")
         committed_budget = spend_budget(budget, "action").budget
@@ -553,7 +591,8 @@ def attack(
         if legality == "out_of_range":
             return refuse(
                 "attack",
-                f"{name} ({spec['range_ft']} ft) cannot reach a target at {dist}",
+                f"{name} ({spec['range_ft']} ft) cannot reach a target at {dist}"
+                f"{_reach_hint(dist, spec['ranged'])}",
             )
         spec["range_disadvantage"] = legality == "disadvantage"
 
@@ -611,15 +650,18 @@ def attack(
 
 
 def _resolve_condition_target(ctx: CommandContext, target: str):
-    """Return (kind, combatant | None, character | None) for a condition target.
+    """Return (kind, combatant | None, character | None) for a condition
+    target, or ("ambiguous", matches, None) when `target` hits more than one
+    live combatant.
 
-    A live combatant key wins; otherwise the target is a character name.
+    A live combatant (key or display name, case-insensitive) wins; otherwise
+    the target is a character name.
     """
     combat = ctx.store.combat()
     if combat["active"]:
-        combatant = next(
-            (c for c in combat["combatants"] if c["key"] == target), None
-        )
+        combatant, ambiguous = find_combatant(combat["combatants"], target)
+        if ambiguous:
+            return "ambiguous", ambiguous, None
         if combatant is not None:
             if combatant["kind"] == "monster":
                 return "monster", combatant, None
@@ -629,6 +671,14 @@ def _resolve_condition_target(ctx: CommandContext, target: str):
     if char is not None:
         return "character", None, char
     return "unknown", None, None
+
+
+def _condition_target_refusal(ctx: CommandContext, target: str, kind: str, combatant) -> str:
+    """The refusal text for an unresolved/ambiguous condition target."""
+    if kind == "ambiguous":
+        return ambiguous_combatant_refusal(target, combatant)
+    combatants = ctx.store.combat()["combatants"] if ctx.store.combat()["active"] else []
+    return unknown_combatant_refusal("target", target, combatants)
 
 
 @command("apply_condition")
@@ -647,8 +697,14 @@ def apply_condition(
             f"unknown condition {condition!r} (valid conditions: {_VALID_CONDITIONS})",
         )
     kind, combatant, char = _resolve_condition_target(ctx, target)
-    if kind == "unknown":
-        return refuse("apply_condition", f"unknown target {target!r}")
+    if kind in ("unknown", "ambiguous"):
+        return refuse(
+            "apply_condition", _condition_target_refusal(ctx, target, kind, combatant)
+        )
+    # Normalize to the combatant's canonical key: `target` may have arrived
+    # as a display name, and every store lookup below matches on key.
+    if combatant is not None:
+        target = combatant["key"]
 
     # Exhaustion is level-based and tracked only on characters.
     if condition == "exhaustion" or exhaustion_delta:
@@ -727,8 +783,12 @@ def remove_condition(
             f"unknown condition {condition!r} (valid conditions: {_VALID_CONDITIONS})",
         )
     kind, combatant, char = _resolve_condition_target(ctx, target)
-    if kind == "unknown":
-        return refuse("remove_condition", f"unknown target {target!r}")
+    if kind in ("unknown", "ambiguous"):
+        return refuse(
+            "remove_condition", _condition_target_refusal(ctx, target, kind, combatant)
+        )
+    if combatant is not None:
+        target = combatant["key"]
 
     if condition == "exhaustion":
         if char is None:

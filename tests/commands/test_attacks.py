@@ -2,7 +2,9 @@ import pytest
 
 from dm_engine.commands import registry
 from dm_engine.commands.attacks import _bonus_damage_riders
+from dm_engine.commands.registry import RecordingRoller
 from dm_engine.content.lookup import RulesDB
+from dm_engine.rules.attacks import roll_damage
 
 pytestmark = pytest.mark.usefixtures("party")
 
@@ -901,25 +903,22 @@ def test_plain_attack_has_no_bonus_damage(ctx):
     assert not hit.data.get("bonus_damage")
 
 
-def test_bonus_rider_doubles_on_crit(ctx):
-    """Crits double every damage die of the attack, riders included (5e RAW:
-    extra damage dice are part of the attack). An unconscious, engaged
-    target takes an automatic critical hit (see
-    test_damage_while_dying_kill_maps_to_defeated_in_narrative) — deterministic,
-    not a lucky natural 20 — so the poison rider's dice count is forced to
-    double without fabricating a crit mechanism."""
-    _duel_vs_kira(ctx, "giant-toad", target_hp=100)
-    kira_id = ctx.store.get_character("Kira")["id"]
-    ctx.store.update_resources(kira_id, conditions=["unconscious"])
-    ctx.store.conn.commit()
+def test_bonus_rider_doubles_dice_on_crit():
+    """A rider is rolled through the SAME roll_damage path as the primary hit,
+    so `_resolve_swing` passing the swing's `critical` flag through is what
+    makes a crit double the rider dice. Pin that contract at the roll layer:
+    a crit rolls TWICE the dice of a non-crit for the giant-toad's 1d10 poison
+    rider (2 rolls vs 1). Asserting on dice COUNT (not the summed raw) is
+    falsifiable — forcing critical=False here would drop the count to 1 and
+    fail, unlike a range check on the sum where a non-doubled 1d10 (1-10) is a
+    subset of a doubled 2d10 (2-20)."""
+    non_crit = roll_damage(RecordingRoller(99), "1d10", critical=False)
+    assert len(non_crit.rolls) == 1
 
-    hit = _land_hit(ctx, "giant-toad-1", "Bite")
-    assert hit.data["critical"] is True
-    rider = hit.data["bonus_damage"][0]
-    # non-crit 1d10 tops out at 10; a doubled 2d10 rider can only exceed
-    # that ceiling if the crit actually doubled the dice.
-    assert rider["raw"] >= 2
-    assert rider["raw"] <= 20
+    crit = roll_damage(RecordingRoller(99), "1d10", critical=True)
+    assert len(crit.rolls) == 2
+    # doubled dice => strictly more total on the same seed (both dice > 0)
+    assert crit.total > non_crit.total
 
 
 def test_poison_resistant_target_halves_only_the_rider(ctx):

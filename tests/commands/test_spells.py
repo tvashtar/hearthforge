@@ -369,3 +369,28 @@ def test_unknown_spell_and_not_known_refuse(ctx):
     not_known = registry.execute("cast_spell", ctx, caster="Kira",
                                  spell_slug="cure-wounds", targets=["Kira"])
     assert not_known.ok is False
+
+
+def test_not_known_refusal_lists_known_spells_and_steers(ctx):
+    # Kira (fighter) knows no spells: the refusal must say so explicitly
+    # and steer to the legal alternatives, not just name the missing spell.
+    result = registry.execute("cast_spell", ctx, caster="Kira",
+                              spell_slug="cure-wounds", targets=["Kira"])
+    assert result.ok is False
+    assert result.refusal == (
+        "Kira does not know Cure Wounds (knows: none) — add spells at "
+        "character creation, or adjudicate the effect via dm_ruling"
+    )
+
+
+def test_not_known_refusal_lists_known_spells_when_some_are_known(ctx):
+    # Brother Aldric knows several spells but not a spell he lacks — the
+    # refusal should enumerate his actual list, sorted, to steer the model.
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="bane")
+    assert result.ok is False
+    assert result.refusal == (
+        "Brother Aldric does not know Bane (knows: bless, burning-hands, "
+        "cure-wounds, guiding-bolt, hold-person, sacred-flame) — add spells "
+        "at character creation, or adjudicate the effect via dm_ruling"
+    )

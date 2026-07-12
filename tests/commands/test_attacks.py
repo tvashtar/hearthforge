@@ -330,6 +330,37 @@ def test_monster_attack_name_matches_case_insensitively(ctx, combat):
     assert result.ok, result.refusal
 
 
+def test_attack_name_defaults_when_single_attack(ctx, combat):
+    # TVA-58: Brother Aldric has exactly one attack (mace) — omitting
+    # attack_name is unambiguous, so it should resolve instead of refusing.
+    _engage_pair(ctx, "Brother Aldric", "goblin-1")
+    _force_turn(ctx, "Brother Aldric", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Brother Aldric", target="goblin-1")
+    assert result.ok, result.refusal
+    assert result.data["attack_name"] == "mace"
+
+
+def test_attack_name_still_required_when_multiple(ctx):
+    # TVA-58: a combatant with more than one attack still needs attack_name
+    # (or attack_names) — but the refusal now enumerates the options.
+    registry.execute(
+        "create_character", ctx, name="Dual", role="companion",
+        class_slug="fighter", race_slug="human",
+        abilities={"str": 16, "dex": 14, "con": 14, "int": 10, "wis": 12, "cha": 8},
+        ac=16, proficiencies={"skills": ["athletics"]},
+        attacks=[{"weapon": "longsword", "name": "longsword"},
+                 {"weapon": "shortsword", "name": "shortsword"}],
+    )
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "Dual", "goblin-1")
+    _force_turn(ctx, "Dual", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Dual", target="goblin-1")
+    assert result.ok is False
+    assert "longsword" in result.refusal and "shortsword" in result.refusal
+
+
 def test_turn_order_refusal_names_active_combatant(ctx, combat):
     # TVA-39: name whoever IS up and how to proceed instead of a bare
     # "it is not X's turn".
@@ -649,8 +680,10 @@ def test_multiattack_param_validation(ctx, combat):
     both = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
                             attack_name="longsword", attack_names=["longsword"])
     assert both.ok is False
-    neither = registry.execute("attack", ctx, attacker="Kira", target="goblin-1")
-    assert neither.ok is False
+    # `neither` (no attack_name, no attack_names) is deliberately not tested
+    # here: TVA-58 makes it default to Kira's sole attack (longsword) rather
+    # than refuse — see test_attack_name_defaults_when_single_attack and
+    # test_attack_name_still_required_when_multiple.
     empty = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
                              attack_names=[])
     assert empty.ok is False

@@ -68,7 +68,7 @@ def test_campaign_lifecycle(tmp_path, rules_path):
         before = ctx.store.world_clock()
         _run(ctx, "create_location", slug="millbrook-mill", name="The Old Mill",
              description="A waterwheel long since stopped.", region="Millbrook")
-        travelled = _run(ctx, "travel", destination_slug="millbrook-mill", days=1)
+        travelled = _run(ctx, "travel", destination_slug="millbrook-mill", hours=0, days=1)
         after = travelled.data["clock"]
         assert after["day"] == before["day"] + 1  # world clock advanced
         assert after["location_slug"] == "millbrook-mill"

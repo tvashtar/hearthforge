@@ -57,6 +57,16 @@ def test_travel_requires_positive_duration(ctx):
     assert ctx.store.world_clock()["location_slug"] is None
 
 
+def test_travel_hours_zero_with_days_is_legal(ctx):
+    # TVA-58: hours becomes a required *parameter*, but hours=0 is still a
+    # legal value as long as the hours+days total is positive.
+    registry.execute("create_location", ctx, slug="mill", name="Old Mill",
+                     description="Creaky", region="valley")
+    result = registry.execute("travel", ctx, destination_slug="mill", hours=0, days=2)
+    assert result.ok, result.refusal
+    assert ctx.store.world_clock()["day"] == 3
+
+
 def test_create_npc_upserts_and_logs_event(ctx):
     result = registry.execute(
         "create_npc", ctx, name="Mara", disposition="friendly",

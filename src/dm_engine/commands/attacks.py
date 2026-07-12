@@ -113,6 +113,20 @@ def _hit_rider(desc: str) -> dict:
     return rider
 
 
+def _attacker_attack_names(ctx: CommandContext, atk: dict) -> list[str]:
+    """The names a combatant could pass as `attack_name`, in storage order.
+
+    Same source each kind resolves against in `_resolve_attack_spec`:
+    a character's stored `attacks`, or a monster's actions that carry an
+    `attack_bonus` (i.e. are actually attacks, not other action types)."""
+    if atk["kind"] == "character":
+        char = ctx.store.get_character_by_id(atk["character_id"])
+        return [s["name"] for s in char["attacks"]]
+    record = ctx.rules.get_monster(atk["monster_slug"])
+    actions = (record.model_extra or {}).get("actions", [])
+    return [a["name"] for a in actions if "attack_bonus" in a]
+
+
 def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> dict | str:
     """Normalize one named attack of a combatant into a spec dict, or return
     a refusal string.
@@ -529,7 +543,18 @@ def attack(
             )
         names = list(attack_names)
     elif attack_name is None:
-        return refuse("attack", "attack_name (or attack_names) is required")
+        # TVA-58: with exactly one attack there is nothing to disambiguate —
+        # use it instead of making the caller name what's already obvious.
+        available = _attacker_attack_names(ctx, atk)
+        if len(available) == 1:
+            names = available
+        elif available:
+            return refuse(
+                "attack",
+                f"attack_name is required — {attacker} has: {', '.join(available)}",
+            )
+        else:
+            return refuse("attack", "attack_name (or attack_names) is required")
     else:
         names = [attack_name]
 

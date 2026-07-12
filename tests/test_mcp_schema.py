@@ -104,3 +104,12 @@ def test_dm_ruling_description_shows_a_worked_effect_example():
     # "op" key, not just the bare op-name cheatsheet.
     desc = _description(registered_commands()["dm_ruling"], "dm_ruling")
     assert '"op": "adjust_hp"' in desc
+
+
+def test_travel_requires_hours_in_schema():
+    # TVA-58: `hours` used to default to 0, so a caller could omit it and
+    # silently no-op the hour component of a trip. Dropping the default
+    # makes the introspected schema mark it required.
+    schema = input_schema(registered_commands()["travel"])
+    assert "hours" in schema["required"]
+    assert "days" not in schema["required"]

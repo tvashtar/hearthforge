@@ -850,6 +850,17 @@ def test_bonus_damage_riders_parses_unconditional_secondary(rules_path):
     ]
 
 
+def test_bonus_damage_riders_parses_modifier_dice_with_desc_whitespace(rules_path):
+    """TVA-64: structured damage_dice omits spaces around the operator
+    ("2d10+6") but SRD prose adds them ("2d10 + 6") — the behir's Constrict
+    slashing rider must still auto-resolve, not silently fall back to a
+    DM ruling."""
+    action = _monster_action(rules_path, "behir", "Constrict")
+    assert _bonus_damage_riders(action) == [
+        {"damage_notation": "2d10+6", "damage_type": "slashing"}
+    ]
+
+
 def test_bonus_damage_riders_excludes_save_gated(rules_path):
     """Save-gated secondary damage ("taking ... on a failed save") stays
     DM-adjudicated, not auto-applied: the assassin's poison and the

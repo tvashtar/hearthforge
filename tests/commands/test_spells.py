@@ -362,6 +362,107 @@ def test_magic_missile_concentration_check_per_dart(ctx):
         assert entry["concentration_check"] == {"dc": 10}
 
 
+# --- forgiving combat-target resolution (TVA-38) -------------------------
+
+
+def _start_labeled_fight(ctx, count=1, label="Fen Scout"):
+    registry.execute(
+        "start_combat", ctx,
+        monsters=[{"slug": "goblin", "count": count, "band": "near", "label": label}],
+        pc_initiative=15,
+    )
+
+
+def test_spell_attack_target_resolves_by_display_name(ctx):
+    # TVA-38: casting at a monster by its narrated display name, any case.
+    _grant_spells(ctx, "Brother Aldric", "fire-bolt")
+    _start_labeled_fight(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="fire-bolt", targets=["fen scout"],
+                              spend="none")
+    assert result.ok, result.refusal
+    # The payload reports the canonical key, not the alias the caller typed.
+    assert result.data["per_target"][0]["key"] == "goblin-1"
+
+
+def test_spell_attack_unknown_target_lists_roster(ctx):
+    _grant_spells(ctx, "Brother Aldric", "fire-bolt")
+    _start_labeled_fight(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="fire-bolt", targets=["Bandit 3"],
+                              spend="none")
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert 'goblin-1 "Fen Scout"' in result.refusal
+    assert "Kira" in result.refusal
+
+
+def test_spell_attack_ambiguous_target_refused(ctx):
+    # Two unlabeled goblins both display as "Goblin" — never guess.
+    _grant_spells(ctx, "Brother Aldric", "fire-bolt")
+    _start_goblin_fight(ctx, 2)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="fire-bolt", targets=["Goblin"],
+                              spend="none")
+    assert result.ok is False
+    assert "goblin-1" in result.refusal and "goblin-2" in result.refusal
+    assert "multiple" in result.refusal.lower()
+
+
+def test_magic_missile_darts_resolve_by_display_name(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_labeled_fight(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile", targets=["FEN SCOUT"],
+                              spend="none")
+    assert result.ok, result.refusal
+    assert [e["key"] for e in result.data["per_target"]] == ["goblin-1"] * 3
+
+
+def test_magic_missile_ambiguous_dart_target_keeps_slot(ctx):
+    _grant_spells(ctx, "Brother Aldric", "magic-missile")
+    _start_goblin_fight(ctx, 2)
+    before = _aldric_state(ctx)["spell_slots"]["1"]["remaining"]
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="magic-missile", targets=["Goblin"],
+                              spend="none")
+    assert result.ok is False
+    assert "goblin-1" in result.refusal and "goblin-2" in result.refusal
+    assert _aldric_state(ctx)["spell_slots"]["1"]["remaining"] == before
+
+
+def test_save_spell_explicit_target_resolves_by_display_name(ctx):
+    _start_labeled_fight(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="burning-hands", targets=["fen scout"],
+                              band="near", spend="none")
+    assert result.ok, result.refusal
+    assert result.data["per_target"][0]["key"] == "goblin-1"
+
+
+def test_save_spell_unknown_target_lists_roster(ctx):
+    _start_labeled_fight(ctx)
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="burning-hands", targets=["Bandit 3"],
+                              band="near", spend="none")
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert 'goblin-1 "Fen Scout"' in result.refusal
+
+
+def test_heal_target_resolves_case_insensitively_in_combat(ctx):
+    _start_labeled_fight(ctx)
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE resources SET hp = 3 WHERE character_id = ?",
+                           (kira["id"],))
+    ctx.store.conn.commit()
+    result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
+                              spell_slug="cure-wounds", targets=["kira"],
+                              spend="none")
+    assert result.ok, result.refusal
+    assert ctx.store.get_resources(kira["id"])["hp"] > 3
+
+
 def test_unknown_spell_and_not_known_refuse(ctx):
     missing = registry.execute("cast_spell", ctx, caster="Brother Aldric",
                                spell_slug="wish")

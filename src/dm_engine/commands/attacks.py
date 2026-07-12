@@ -486,6 +486,42 @@ def _resolve_swing(
         data["concentration_broken"] = True
     if fragment.get("defeated"):
         data["defeated"] = True
+
+    # Unconditional secondary damage (TVA-63, e.g. the giant toad's poison
+    # bite) auto-resolves at Tier 1: rolled/mitigated/applied the same way as
+    # the primary hit, stacking onto the HP the primary already lowered. A
+    # rider can itself drop/kill the target, so the target/defeated/
+    # concentration fragments are refreshed from each rider in turn.
+    bonus = []
+    for rider in spec.get("bonus_damage", []):
+        rdmg = roll_damage(
+            ctx.roller, rider["damage_notation"], critical=critical, player_value=None
+        )
+        rtype = rider["damage_type"]
+        if tgt["kind"] == "monster":
+            record = ctx.rules.get_monster(tgt["monster_slug"])
+            r_res, r_vuln, r_imm = _monster_defense_sets(
+                record, rtype, is_magical=spec["magical"]
+            )
+        else:
+            tres = ctx.store.get_resources(tgt["character_id"])
+            petr = effects_for(tres["conditions"], tres.get("exhaustion", 0)).resist_all_damage
+            r_res = {rtype} if petr else set()
+            r_vuln = set()
+            r_imm = set()
+        rmit = apply_mitigation(
+            rdmg.total, rtype, resistances=r_res, vulnerabilities=r_vuln, immunities=r_imm
+        )
+        frag = apply_damage_to_target(ctx, tgt["key"], rmit.final, rtype, critical=critical)
+        data["target"] = frag["target"]  # keep latest hp/status
+        if frag.get("defeated"):
+            data["defeated"] = True
+        if frag.get("concentration_broken"):
+            data["concentration_broken"] = True
+        bonus.append({"raw": rdmg.total, "final": rmit.final,
+                      "type": rtype, "applied": rmit.applied})
+    if bonus:
+        data["bonus_damage"] = bonus
     return data
 
 
@@ -530,9 +566,14 @@ def _swing_digest(attacker: str, target: str, swing: dict) -> str:
             f"({ar['total']} vs AC {ar['target_ac']}) — {effect}"
         )
     dmg = swing["damage"]
+    bonus_tail = ""
+    if swing.get("bonus_damage"):
+        bonus_tail = " " + ", ".join(
+            f"+{b['final']} {b['type']}" for b in swing["bonus_damage"]
+        )
     rider_tail = " (rider: needs ruling)" if swing.get("on_hit") else ""
     return (
-        f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']} "
+        f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']}{bonus_tail} "
         f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}{rider_tail}"
     )
 

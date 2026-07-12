@@ -783,11 +783,11 @@ def _duel_vs_kira(ctx, slug, *, target_ac=1, target_hp=100):
     _force_turn(ctx, f"{slug}-1", band="engaged", engaged_with=["Kira"])
 
 
-def _land_hit(ctx, attacker, attack_name):
+def _land_hit(ctx, attacker, attack_name, target="Kira"):
     """Roll `attack` until a seeded hit lands (spend='none'); return it."""
     for _ in range(12):
         result = registry.execute("attack", ctx, attacker=attacker,
-                                  target="Kira", attack_name=attack_name, spend="none")
+                                  target=target, attack_name=attack_name, spend="none")
         assert result.ok, result.refusal
         if result.data["hit"]:
             return result
@@ -857,6 +857,96 @@ def test_bonus_damage_riders_excludes_save_gated(rules_path):
 
     action = _monster_action(rules_path, "aboleth", "Tentacle")
     assert _bonus_damage_riders(action) == []
+
+
+# --- bonus-damage rider application (TVA-63) -----------------------------
+
+
+def test_giant_toad_bite_auto_applies_poison_rider(ctx):
+    """The giant toad's bite carries an unconditional poison rider: a hit
+    auto-resolves BOTH the piercing primary and the poison bonus, and the
+    target's HP drops by their sum. The grapple rider (on_hit) is unrelated
+    to the poison and must still surface (TVA-57 stays intact)."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira_id = ctx.store.get_character("Kira")["id"]
+    hp_before = ctx.store.get_resources(kira_id)["hp"]
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "piercing"
+    bonus = hit.data["bonus_damage"]
+    assert len(bonus) == 1
+    rider = bonus[0]
+    assert rider["type"] == "poison"
+    assert rider["raw"] > 0
+    assert rider["final"] > 0
+
+    hp_after = ctx.store.get_resources(kira_id)["hp"]
+    assert hp_before - hp_after == hit.data["damage"]["final"] + rider["final"]
+
+    # grapple rider is untouched by rider auto-resolution (TVA-57)
+    on_hit = hit.data["on_hit"]
+    assert on_hit is not None
+    assert "grappled" in on_hit["conditions"]
+
+    assert f"+{rider['final']} poison" in hit.digest
+
+
+def test_plain_attack_has_no_bonus_damage(ctx):
+    """A bandit's scimitar has no secondary damage entry: no rider is
+    invented on the swing."""
+    _duel_vs_kira(ctx, "bandit")
+    hit = _land_hit(ctx, "bandit-1", "Scimitar")
+    assert hit.data["damage"] is not None
+    assert not hit.data.get("bonus_damage")
+
+
+def test_bonus_rider_doubles_on_crit(ctx):
+    """Crits double every damage die of the attack, riders included (5e RAW:
+    extra damage dice are part of the attack). An unconscious, engaged
+    target takes an automatic critical hit (see
+    test_damage_while_dying_kill_maps_to_defeated_in_narrative) — deterministic,
+    not a lucky natural 20 — so the poison rider's dice count is forced to
+    double without fabricating a crit mechanism."""
+    _duel_vs_kira(ctx, "giant-toad", target_hp=100)
+    kira_id = ctx.store.get_character("Kira")["id"]
+    ctx.store.update_resources(kira_id, conditions=["unconscious"])
+    ctx.store.conn.commit()
+
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    assert hit.data["critical"] is True
+    rider = hit.data["bonus_damage"][0]
+    # non-crit 1d10 tops out at 10; a doubled 2d10 rider can only exceed
+    # that ceiling if the crit actually doubled the dice.
+    assert rider["raw"] >= 2
+    assert rider["raw"] <= 20
+
+
+def test_poison_resistant_target_halves_only_the_rider(ctx):
+    """The giant toad's bite is piercing (no resistance on a duergar) plus a
+    poison rider — and the duergar has plain poison resistance (not piercing).
+    The rider halves; the primary piercing damage does not."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "giant-toad", "count": 1, "band": "near"},
+                               {"slug": "duergar", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "giant-toad-1", "duergar-1")
+    _force_turn(ctx, "giant-toad-1", band="engaged", engaged_with=["duergar-1"])
+    hit = None
+    for _ in range(60):
+        result = registry.execute("attack", ctx, attacker="giant-toad-1",
+                                  target="duergar-1", attack_name="Bite", spend="none")
+        assert result.ok, result.refusal
+        if result.data["hit"]:
+            hit = result
+            break
+    assert hit is not None, "no hit landed in 60 seeded attempts"  # pragma: no cover
+
+    assert hit.data["damage"]["applied"] == []  # piercing: not resisted
+    rider = hit.data["bonus_damage"][0]
+    assert rider["type"] == "poison"
+    assert "resistance" in rider["applied"]
+    assert rider["final"] == rider["raw"] // 2
 
 
 def test_non_attack_action_refusal_names_the_action(ctx):

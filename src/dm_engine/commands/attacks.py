@@ -114,6 +114,12 @@ def _hit_rider(desc: str) -> dict:
     return rider
 
 
+def _dice_pattern(dice: str) -> str:
+    """Escape a dice string for regex, but tolerate the space SRD prose puts
+    around the operator ("2d10+6" in data vs "2d10 + 6" in desc)."""
+    return re.escape(dice).replace(r"\+", r"\s*\+\s*").replace(r"\-", r"\s*\-\s*")
+
+
 def _bonus_damage_riders(action: dict) -> list[dict]:
     """Unconditional secondary damage entries that auto-resolve at Tier 1.
 
@@ -128,11 +134,12 @@ def _bonus_damage_riders(action: dict) -> list[dict]:
         dtype = (entry.get("damage_type") or {}).get("index")
         if not dice or not dtype:
             continue
+        pattern = _dice_pattern(dice)
         unconditional = re.search(
-            rf"plus\s+\d+\s*\({re.escape(dice)}\)\s+{dtype}\s+damage", desc, re.I
+            rf"plus\s+\d+\s*\({pattern}\)\s+{dtype}\s+damage", desc, re.I
         )
-        gated = re.search(rf"taking\s+\d+\s*\({re.escape(dice)}\)", desc, re.I) or \
-            re.search(rf"saving throw.{{0,80}}?{re.escape(dice)}", desc, re.I)
+        gated = re.search(rf"taking\s+\d+\s*\({pattern}\)", desc, re.I) or \
+            re.search(rf"saving throw.{{0,80}}?{pattern}", desc, re.I)
         if unconditional and not gated:
             riders.append({"damage_notation": dice, "damage_type": dtype})
     return riders

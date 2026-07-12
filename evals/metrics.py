@@ -19,13 +19,39 @@ def max_event_id(db_path: Path) -> int:
     return row[0]
 
 
+def _matcher_clauses(done_when: dict) -> tuple[str, list]:
+    """Extra SQL predicates for the optional done_when matchers: `inputs`
+    (exact match per key against the inputs column), `result` (exact match
+    per json.path against the result column), and `refusal_contains`
+    (substring match against result.refusal).
+
+    Matcher keys/paths are interpolated into the SQL via f-string (not
+    parameterized) because they come from checked-in scenario YAML, which is
+    trusted input, not user-supplied at runtime; only the *values* are bound
+    as query parameters.
+    """
+    clauses: list[str] = []
+    params: list = []
+    for key, val in (done_when.get("inputs") or {}).items():
+        clauses.append(f"AND json_extract(inputs, '$.{key}') = ?")
+        params.append(val)
+    for path, val in (done_when.get("result") or {}).items():
+        clauses.append(f"AND json_extract(result, '$.{path}') = ?")
+        params.append(val)
+    if done_when.get("refusal_contains"):
+        clauses.append("AND json_extract(result, '$.refusal') LIKE ?")
+        params.append(f"%{done_when['refusal_contains']}%")
+    return " ".join(clauses), params
+
+
 def beat_done(db_path: Path, done_when: dict, *, after_id: int) -> bool:
     ok = 1 if done_when.get("ok", True) else 0
+    extra_sql, extra_params = _matcher_clauses(done_when)
     with _connect(db_path) as db:
         row = db.execute(
             "SELECT COUNT(*) FROM event_log WHERE id > ? AND command = ?"
-            " AND json_extract(result, '$.ok') = ?",
-            (after_id, done_when["command"], ok),
+            f" AND json_extract(result, '$.ok') = ? {extra_sql}",
+            (after_id, done_when["command"], ok, *extra_params),
         ).fetchone()
     return row[0] > 0
 
@@ -46,8 +72,9 @@ def classify_beat_failure(db_path: Path, done_when: dict, *, after_id: int) -> d
     Queryable from the event log only (no transcript parsing):
     - "not_attempted": no event-log row for done_when's command after the
       beat's marker — the DM never tried the mechanical action at all.
-    - "refused": the command was attempted but never with the desired `ok`
-      (per beat_done's semantics); the most recent attempt's refusal/digest
+    - "refused": the command was attempted but never satisfied done_when's
+      full criteria (ok plus any inputs/result/refusal_contains matchers,
+      per beat_done's semantics); the most recent attempt's refusal/digest
       is surfaced for triage.
 
     Callers add the "timeout" reason themselves for the turn/run-timeout

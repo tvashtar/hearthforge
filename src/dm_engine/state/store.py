@@ -558,6 +558,17 @@ class CampaignStore:
         rows = self.conn.execute("SELECT * FROM session_recaps ORDER BY id").fetchall()
         return [dict(r) for r in rows]
 
+    def events_since_last_checkpoint(self) -> int:
+        """Event rows since the last successful `checkpoint` command (auto or
+        manual), or since the log began if none has run yet. TVA-41: the
+        registry uses this to decide when to fire an auto-checkpoint."""
+        row = self.conn.execute(
+            "SELECT MAX(id) FROM event_log"
+            " WHERE command = 'checkpoint' AND json_extract(result, '$.ok') = 1"
+        ).fetchone()
+        last_id = row[0] or 0
+        return self.event_count() - last_id
+
     def events_tail(self, limit: int) -> list[dict]:
         """Newest-first compact projection of the event log; `ok`/`digest`
         come out of the stored result envelope, not the full row."""

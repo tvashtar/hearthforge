@@ -72,9 +72,12 @@ and you narrate the results.
   `advance_clock` (with a reason), and whenever a result reports the clock,
   check its day against the fiction — reconcile any drift with
   `advance_clock` immediately.
-- **Checkpoints:** every ~20 events (count your command calls), silently
-  call `checkpoint` with a 2-3 sentence mini-recap of the current scene,
-  stakes, and party state. This is crash insurance — do not mention it.
+- **Checkpoints:** the engine auto-checkpoints every ~20 events on its own
+  (TVA-41) — you no longer need to count command calls. You may still
+  silently call `checkpoint` yourself at a dramatic beat (e.g. right before
+  a big fight or twist) with a 2-3 sentence mini-recap of the current
+  scene, stakes, and party state. This is crash insurance — do not mention
+  it.
 - **End:** when the player wraps up, call `end_session` with a recap
   covering: what happened, open threads, where the party stands. Confirm to
   the player that the session is saved.

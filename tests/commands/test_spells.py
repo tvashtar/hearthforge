@@ -541,7 +541,16 @@ def test_healing_hardcore_dead_pc_is_refused(ctx_hardcore, party_hardcore):
     _kill_kira_via_death_saves(ctx)
     assert ctx.store.get_character("Kira")["status"] == "dead"  # hardcore mode
 
+    aldric = ctx.store.get_character("Brother Aldric")
+    before = ctx.store.get_resources(aldric["id"])["spell_slots"]["1"]["remaining"]
     result = registry.execute("cast_spell", ctx, caster="Brother Aldric",
                               spell_slug="cure-wounds", targets=["Kira"])
     assert result.ok is False
     assert "Kira" in result.refusal and "dead" in result.refusal.lower()
+    # The refusal must land before the slot is spent (registry commits
+    # refusals) — and Kira must stay exactly as she died.
+    after = ctx.store.get_resources(aldric["id"])["spell_slots"]["1"]["remaining"]
+    assert after == before
+    kira = ctx.store.get_character("Kira")
+    assert kira["status"] == "dead"
+    assert ctx.store.get_resources(kira["id"])["hp"] == 0

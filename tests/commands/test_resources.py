@@ -108,3 +108,29 @@ def test_add_then_remove_item_mutates_inventory(ctx):
     assert result.ok
     assert ctx.store.items_for(kira_id)[0]["quantity"] == 1
     assert ctx.store.event_count() == before + 2  # both commands logged events
+
+
+def test_use_item_heal_refused_for_hardcore_dead_user(ctx_hardcore, party_hardcore):
+    """TVA-52 follow-up: use_item's healing path is self-targeting, so a
+    hardcore-dead character must not be able to potion themselves back to
+    hp > 0 with status still 'dead' (a corrupted record). The refusal must
+    land before the item charge is consumed (registry commits refusals)."""
+    ctx = ctx_hardcore
+    kira = ctx.store.get_character("Kira")
+    registry.execute("add_item", ctx, character="Kira", item="healing potion")
+    # Kill Kira through the real dying path: 0 hp + three failed death saves
+    # (hardcore death_mode maps the kill to status 'dead').
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    for _ in range(3):
+        assert registry.execute("death_save", ctx, character="Kira",
+                                player_value=2).ok
+    assert ctx.store.get_character("Kira")["status"] == "dead"
+
+    result = registry.execute("use_item", ctx, character="Kira",
+                              item="healing potion", heal="2d4+2")
+    assert result.ok is False
+    assert "Kira" in result.refusal and "dead" in result.refusal.lower()
+    assert ctx.store.items_for(kira["id"])[0]["quantity"] == 1  # charge kept
+    assert ctx.store.get_resources(kira["id"])["hp"] == 0
+    assert ctx.store.get_character("Kira")["status"] == "dead"

@@ -13,6 +13,12 @@ from __future__ import annotations
 import re
 
 from dm_engine.commands.characters import award_party_xp
+from dm_engine.commands.combatants import (
+    ambiguous_combatant_refusal,
+    find_combatant,
+    turn_order_refusal,
+    unknown_combatant_refusal,
+)
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, RecordingRoller, command
 from dm_engine.rules.action_economy import (
@@ -323,9 +329,16 @@ def move(
     combat = ctx.store.combat()
     if not combat["active"]:
         return refuse("move", "no combat is active")
+    combatants = combat["combatants"]
+    resolved, ambiguous = find_combatant(combatants, combatant)
+    if ambiguous:
+        return refuse("move", ambiguous_combatant_refusal(combatant, ambiguous))
+    if resolved is None:
+        return refuse("move", unknown_combatant_refusal("combatant", combatant, combatants))
+    combatant = resolved["key"]
     actor = _active_combatant(combat, combatant)
     if actor is None:
-        return refuse("move", f"it is not {combatant}'s turn")
+        return refuse("move", turn_order_refusal(combatants, combat["turn_index"], combatant))
     to_band = to_band.strip().lower()
     if to_band not in BAND_ORDER:
         return refuse("move", f"unknown band {to_band!r} (valid bands: {_VALID_BANDS})")
@@ -405,13 +418,22 @@ def engage(
     combat = ctx.store.combat()
     if not combat["active"]:
         return refuse("engage", "no combat is active")
+    combatants = combat["combatants"]
+    resolved, ambiguous = find_combatant(combatants, combatant)
+    if ambiguous:
+        return refuse("engage", ambiguous_combatant_refusal(combatant, ambiguous))
+    if resolved is None:
+        return refuse("engage", unknown_combatant_refusal("combatant", combatant, combatants))
+    combatant = resolved["key"]
     actor = _active_combatant(combat, combatant)
     if actor is None:
-        return refuse("engage", f"it is not {combatant}'s turn")
-    combatants = combat["combatants"]
-    target_c = next((c for c in combatants if c["key"] == target), None)
+        return refuse("engage", turn_order_refusal(combatants, combat["turn_index"], combatant))
+    target_c, tgt_ambiguous = find_combatant(combatants, target)
+    if tgt_ambiguous:
+        return refuse("engage", ambiguous_combatant_refusal(target, tgt_ambiguous))
     if target_c is None:
-        return refuse("engage", f"unknown combatant {target!r}")
+        return refuse("engage", unknown_combatant_refusal("target", target, combatants))
+    target = target_c["key"]
     if actor["budget"] is None:
         return refuse("engage", f"{combatant} has no movement this turn")
     if not _condition_effects(ctx, actor).can_move:

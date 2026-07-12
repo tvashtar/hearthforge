@@ -162,6 +162,48 @@ def test_unknown_target_refused(ctx, combat):
     assert result.ok is False and "target" in result.refusal.lower()
 
 
+def test_unknown_target_refusal_lists_live_combatants(ctx, combat):
+    # TVA-38: an unknown identifier lists the live roster (key, and display
+    # name when it differs) so a retry doesn't have to guess again.
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Kira", target="Bandit 3",
+                              attack_name="longsword")
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert "Kira" in result.refusal
+    assert 'goblin-1 "Goblin"' in result.refusal
+    assert 'goblin-2 "Goblin"' in result.refusal
+
+
+def test_target_resolves_by_display_name_case_insensitively(ctx, combat):
+    # TVA-38: goblin-1's display name is "Goblin"; unlabeled, so it collides
+    # with goblin-2's — use a label to make the name unique first.
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "goblin-1":
+            c["name"] = "Fen Scout"
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="kira", target="fen scout",
+                              attack_name="longsword",
+                              player_attack_value=15, player_damage_value=6)
+    assert result.ok, result.refusal
+    assert result.data["target"]["key"] == "goblin-1"
+
+
+def test_target_ambiguous_display_name_refused(ctx, combat):
+    # goblin-1 and goblin-2 both display as "Goblin" (no label) — an
+    # identifier that hits both must refuse and list the candidates, never
+    # silently pick one.
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1", "goblin-2"])
+    result = registry.execute("attack", ctx, attacker="Kira", target="Goblin",
+                              attack_name="longsword")
+    assert result.ok is False
+    assert "goblin-1" in result.refusal and "goblin-2" in result.refusal
+    assert "multiple" in result.refusal.lower()
+
+
 def test_defeated_target_refused(ctx, combat):
     _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
     combatants = ctx.store.combat()["combatants"]
@@ -196,6 +238,58 @@ def test_unknown_attack_name_lists_available(ctx, combat):
     result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
                               attack_name="greataxe")
     assert result.ok is False and "longsword" in result.refusal
+
+
+def test_character_attack_name_matches_case_insensitively(ctx, combat):
+    # TVA-38: "Longsword" must resolve the same as the stored "longsword".
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="Longsword",
+                              player_attack_value=15, player_damage_value=6)
+    assert result.ok, result.refusal
+
+
+def test_monster_attack_name_matches_case_insensitively(ctx, combat):
+    _engage_pair(ctx, "Kira", "goblin-1")
+    _force_turn(ctx, "goblin-1", band="engaged", engaged_with=["Kira"])
+    result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                              attack_name="scimitar", spend="action")
+    assert result.ok, result.refusal
+
+
+def test_turn_order_refusal_names_active_combatant(ctx, combat):
+    # TVA-39: name whoever IS up and how to proceed instead of a bare
+    # "it is not X's turn".
+    _force_turn(ctx, "Kira", band="engaged", engaged_with=["goblin-1"])
+    result = registry.execute("attack", ctx, attacker="goblin-1", target="Kira",
+                              attack_name="Scimitar", spend="action")
+    assert result.ok is False
+    assert "it is not goblin-1's turn" in result.refusal
+    assert "it is Kira's turn" in result.refusal
+    assert "act with Kira" in result.refusal
+    assert "next_turn" in result.refusal
+
+
+def test_reach_refusal_at_near_band_suggests_engage(ctx, combat):
+    # TVA-39: a melee weapon short of a near-band target should point at
+    # engage (which can legally close it) rather than a bare distance fact.
+    _force_turn(ctx, "Kira", band="near")
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="longsword")
+    assert result.ok is False
+    assert "engage" in result.refusal.lower()
+
+
+def test_reach_refusal_at_far_band_suggests_move_not_engage(ctx, combat):
+    # A melee weapon against a far/distant target needs several turns of
+    # movement — suggesting engage (a single jump costing the full distance)
+    # would routinely be wrong, so the hint must say move instead.
+    _force_turn(ctx, "Kira", band="far")
+    result = registry.execute("attack", ctx, attacker="Kira", target="goblin-1",
+                              attack_name="longsword")
+    assert result.ok is False
+    assert "engage" not in result.refusal.lower()
+    assert "move" in result.refusal.lower()
 
 
 def test_player_value_on_companion_refused(ctx, combat):
@@ -587,6 +681,37 @@ def test_apply_condition_to_monster(ctx, combat):
     assert result.ok
     goblin = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "goblin-1")
     assert "prone" in goblin["conditions"]
+
+
+def test_apply_condition_matches_combatant_name_case_insensitively(ctx, combat):
+    # TVA-38: unlabeled goblin-1/goblin-2 both display "Goblin" — relabel
+    # one so a name match is unambiguous.
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "goblin-1":
+            c["name"] = "Fen Scout"
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    result = registry.execute("apply_condition", ctx, target="fen scout",
+                              condition="prone")
+    assert result.ok, result.refusal
+    goblin = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "goblin-1")
+    assert "prone" in goblin["conditions"]
+
+
+def test_apply_condition_unknown_target_lists_combatants(ctx, combat):
+    result = registry.execute("apply_condition", ctx, target="Bandit 3",
+                              condition="prone")
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert "Kira" in result.refusal
+
+
+def test_apply_condition_ambiguous_target_refused(ctx, combat):
+    result = registry.execute("apply_condition", ctx, target="Goblin",
+                              condition="prone")
+    assert result.ok is False
+    assert "goblin-1" in result.refusal and "goblin-2" in result.refusal
 
 
 def test_apply_exhaustion_delta(ctx):

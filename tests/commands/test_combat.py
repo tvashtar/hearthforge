@@ -371,6 +371,38 @@ def test_move_not_your_turn_refused(ctx):
     assert result.ok is False
 
 
+def test_move_not_your_turn_names_active_combatant(ctx):
+    # TVA-39: name who IS up and how to proceed.
+    _start(ctx)
+    combat = ctx.store.combat()
+    not_active = combat["combatants"][1]["key"]
+    active = combat["combatants"][0]["key"]
+    result = registry.execute("move", ctx, combatant=not_active, to_band="far")
+    assert result.ok is False
+    assert f"it is not {not_active}'s turn" in result.refusal
+    assert f"it is {active}'s turn" in result.refusal
+    assert f"act with {active}" in result.refusal
+    assert "next_turn" in result.refusal
+
+
+def test_move_unknown_combatant_lists_roster(ctx):
+    # TVA-38: an unresolvable identifier lists the live roster.
+    _start(ctx)
+    result = registry.execute("move", ctx, combatant="Nobody", to_band="far")
+    assert result.ok is False
+    assert "'Nobody'" in result.refusal
+    assert "Kira" in result.refusal
+
+
+def test_move_matches_combatant_name_case_insensitively(ctx):
+    # TVA-38: characters' key == name; a differently-cased name still
+    # resolves the active combatant.
+    _start(ctx)
+    active = ctx.store.combat()["combatants"][0]["key"]
+    result = registry.execute("move", ctx, combatant=active.lower(), to_band="far")
+    assert result.ok, result.refusal
+
+
 def test_move_unknown_band_refused(ctx):
     _start(ctx)
     active = ctx.store.combat()["combatants"][0]["key"]
@@ -485,6 +517,42 @@ def test_engage_not_your_turn_refused(ctx):
     active = combat["combatants"][0]["key"]
     result = registry.execute("engage", ctx, combatant=not_active, target=active)
     assert result.ok is False
+
+
+def test_engage_not_your_turn_names_active_combatant(ctx):
+    _start(ctx)
+    combat = ctx.store.combat()
+    not_active = combat["combatants"][1]["key"]
+    active = combat["combatants"][0]["key"]
+    result = registry.execute("engage", ctx, combatant=not_active, target=active)
+    assert result.ok is False
+    assert f"it is {active}'s turn" in result.refusal
+    assert "next_turn" in result.refusal
+
+
+def test_engage_unknown_target_lists_roster(ctx):
+    _start(ctx)
+    active = ctx.store.combat()["combatants"][0]["key"]
+    result = registry.execute("engage", ctx, combatant=active, target="Bandit 3")
+    assert result.ok is False
+    assert "'Bandit 3'" in result.refusal
+    assert "Kira" in result.refusal
+
+
+def test_engage_target_matches_display_name_case_insensitively(ctx):
+    _start(ctx)
+    combatants = ctx.store.combat()["combatants"]
+    active = combatants[0]["key"]
+    target_key = next(
+        c["key"] for c in combatants if c["kind"] == "monster" and c["key"] != active
+    )
+    for c in combatants:
+        if c["key"] == target_key:
+            c["name"] = "Fen Scout"
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    result = registry.execute("engage", ctx, combatant=active, target="fen scout")
+    assert result.ok, result.refusal
 
 
 def test_engage_cannot_afford_refused(ctx):

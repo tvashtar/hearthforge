@@ -99,6 +99,17 @@ def input_schema(handler: Callable[..., object]) -> dict:
     schema: dict = {"type": "object", "properties": properties}
     if required:
         schema["required"] = required
+
+    # Per-parameter schema overrides (TVA-36): a handler may declare a
+    # `__param_schemas__` dict attribute mapping param name -> a full JSON
+    # schema for that parameter, replacing the bare introspected type. This
+    # is how `dm_ruling.effects` gets a real per-op items schema instead of
+    # a shapeless `{"type": "array"}`.
+    overrides = getattr(handler, "__param_schemas__", None)
+    if overrides:
+        for name, override in overrides.items():
+            if name in properties:
+                properties[name] = override
     return schema
 
 

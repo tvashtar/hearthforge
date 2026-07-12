@@ -62,3 +62,36 @@ def test_open_campaign_is_a_registered_command_with_slug_schema():
     schema = input_schema(handler)
     assert schema["properties"]["slug"] == {"type": "string"}
     assert schema["required"] == ["slug"]
+
+
+def test_dm_ruling_effects_has_a_structured_items_schema():
+    # TVA-36: the bare {"type": "array"} gave Haiku no shape hint at all —
+    # each effect object must declare a required, enum-constrained "op".
+    from dm_engine.commands.rulings import _OPS
+
+    schema = input_schema(registered_commands()["dm_ruling"])
+    effects = schema["properties"]["effects"]
+
+    assert effects["type"] == "array"
+    items = effects["items"]
+    assert items["type"] == "object"
+    assert items["required"] == ["op"]
+    assert set(items["properties"]["op"]["enum"]) == set(_OPS)
+    # per-op field docs live somewhere discoverable on the items schema.
+    assert "target" in items["description"] and "delta" in items["description"]
+
+
+def test_dm_ruling_param_schema_override_does_not_disturb_other_params():
+    # The override hook only touches `effects`; everything else keeps the
+    # plain introspected shape (rationale is still a bare required string).
+    schema = input_schema(registered_commands()["dm_ruling"])
+    assert schema["properties"]["rationale"] == {"type": "string"}
+    assert schema["properties"]["description"] == {"type": "string"}
+    assert set(schema["required"]) >= {"description", "rationale"}
+
+
+def test_dm_ruling_description_shows_a_worked_effect_example():
+    # TVA-36: the tool description must show a worked example including the
+    # "op" key, not just the bare op-name cheatsheet.
+    desc = _description(registered_commands()["dm_ruling"], "dm_ruling")
+    assert '"op": "adjust_hp"' in desc

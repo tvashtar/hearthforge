@@ -15,6 +15,7 @@ validate-then-apply split).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from dm_engine.commands.envelope import CommandResult, refuse
@@ -41,10 +42,31 @@ _OPS = tuple(_OP_FIELDS)
 _REST_KINDS = ("short", "long")
 _MINUTES_PER_DAY = 1440
 
+# A single worked example reused by the tool description, the invalid-op
+# refusal (TVA-37), and (via json.dumps) the MCP items schema description
+# (TVA-36) — one canonical example, no drift.
+_EXAMPLE_OP: dict[str, Any] = {"op": "adjust_hp", "target": "Kira", "delta": 4}
+
 
 def ops_cheatsheet() -> str:
     """The op vocabulary as one line, e.g. "adjust_hp(target, delta); ..."."""
     return "; ".join(f"{name}({fields})" for name, fields in _OP_FIELDS.items())
+
+
+def _effects_items_schema() -> dict:
+    """JSON-schema for one `effects[]` entry: required `op` enum plus the
+    per-op field cheatsheet in the description (TVA-36) — generated from
+    `_OP_FIELDS` at import time so it can never drift from the vocabulary
+    the validator actually enforces."""
+    return {
+        "type": "object",
+        "properties": {"op": {"type": "string", "enum": list(_OPS)}},
+        "required": ["op"],
+        "description": (
+            f"Each effect op requires: {ops_cheatsheet()}. "
+            f"Example: {json.dumps(_EXAMPLE_OP)}"
+        ),
+    }
 
 
 def _effect_name_matches(effect: dict, name: str) -> bool:
@@ -75,7 +97,14 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         return f"effect op must be an object, got {op!r}"
     kind = op.get("op")
     if kind not in _OPS:
-        return f"unknown op {kind!r} (valid ops: {', '.join(_OPS)})"
+        # TVA-37: name the vocabulary gap without vocabulary alone — echo
+        # what the caller actually sent (its keys) and show one worked
+        # example, so a single follow-up call can recover instead of
+        # another guess-and-refuse round trip.
+        return (
+            f'each effect needs an "op" field — got keys {sorted(op.keys())!r}; '
+            f"valid ops: {', '.join(_OPS)}; example: {json.dumps(_EXAMPLE_OP)}"
+        )
 
     if kind == "adjust_hp":
         target, delta = op.get("target"), op.get("delta")
@@ -359,11 +388,20 @@ def dm_ruling(
 # The MCP tool description is introspected from the first docstring line
 # (mcp/server.py `_description`), so the op cheatsheet must live there: one
 # line, built from _OP_FIELDS at import time so it can never drift (TVA-25).
+# TVA-36: also show a worked example including the "op" key itself — the
+# cheatsheet alone never demonstrated that each effect object needs one.
 dm_ruling.__doc__ = (
     "Log a DM ruling (mandatory rationale) and apply its `effects` ops "
     "atomically — one invalid op refuses the whole batch. "
-    f"Effect ops: {ops_cheatsheet()}."
+    f"Effect ops: {ops_cheatsheet()}. "
+    f"Example effect: {json.dumps(_EXAMPLE_OP)}."
 )
+
+# TVA-36: give `effects` a real per-op items schema instead of a bare
+# `{"type": "array"}` (mcp/server.py's `input_schema` merges this in).
+dm_ruling.__param_schemas__ = {
+    "effects": {"type": "array", "items": _effects_items_schema()},
+}
 
 
 @command("roll_dice")

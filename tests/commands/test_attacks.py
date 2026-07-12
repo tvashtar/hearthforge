@@ -948,6 +948,74 @@ def test_poison_resistant_target_halves_only_the_rider(ctx):
     assert rider["final"] == rider["raw"] // 2
 
 
+# --- one swing == one death event (TVA-63 double-count guard) -------------
+
+
+def test_swing_damage_is_one_death_event_on_dying_target(ctx):
+    """A single attack is ONE damage event against a dying PC's death saves:
+    the primary hit and every auto-rider together inflict at most one failure
+    (two on a crit), never one-per-damage-type. Regression guard for the
+    rider double-count bug — a giant-toad crit-bite (piercing + poison rider)
+    on a fresh-dying PC must add exactly two failures, not four."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira = ctx.store.get_character("Kira")
+    # Large max_hp so the combined bite is failure-based, not massive-damage
+    # instant death — isolates the failure-count contract.
+    ctx.store.conn.execute("UPDATE characters SET max_hp = 100 WHERE id = ?",
+                           (kira["id"],))
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 0, "stable": False, "dead": False},
+    )
+    ctx.store.conn.commit()
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    assert hit.data["critical"] is True  # unconscious + engaged => auto-crit
+    assert hit.data["bonus_damage"][0]["type"] == "poison"  # the rider fired
+    saves = ctx.store.get_resources(kira["id"])["death_saves"]
+    assert saves["failures"] == 2   # one crit event, NOT 2 (primary) + 2 (rider)
+    assert saves["dead"] is False
+
+
+def test_primary_drop_to_zero_with_rider_leaves_fresh_dying_state(ctx):
+    """When the primary hit drops a conscious PC to 0, the whole swing is one
+    event: the PC gets a FRESH dying state (0 failures) and the rider's excess
+    damage does NOT count as an immediate death-save failure."""
+    _duel_vs_kira(ctx, "giant-toad")
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE characters SET max_hp = 100 WHERE id = ?",
+                           (kira["id"],))
+    ctx.store.update_resources(kira["id"], hp=1, conditions=[])
+    ctx.store.conn.commit()
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert "unconscious" in res["conditions"]
+    assert res["death_saves"]["failures"] == 0  # rider excess, not a failure
+    assert hit.data["bonus_damage"][0]["type"] == "poison"
+
+
+def test_rider_helps_defeat_low_hp_target(ctx):
+    """A swing whose auto-rider damage helps finish a low-HP target defeats it:
+    data['defeated'] is set and the combatant tracker is marked (TVA-63 F3)."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "giant-toad", "count": 1, "band": "near"},
+                               {"slug": "bandit", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    _engage_pair(ctx, "giant-toad-1", "bandit-1")
+    combatants = ctx.store.combat()["combatants"]
+    for c in combatants:
+        if c["key"] == "bandit-1":
+            c["hp"] = 3  # any bite finishes it
+    ctx.store.update_combat(combatants=combatants)
+    ctx.store.conn.commit()
+    _force_turn(ctx, "giant-toad-1", band="engaged", engaged_with=["bandit-1"])
+    hit = _land_hit(ctx, "giant-toad-1", "Bite", target="bandit-1")
+    assert hit.data["defeated"] is True
+    assert hit.data["bonus_damage"][0]["type"] == "poison"  # rider was part of it
+    bandit = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "bandit-1")
+    assert bandit["defeated"] is True
+
+
 def test_non_attack_action_refusal_names_the_action(ctx):
     """Swallow is a stat-block action, not a weapon attack. Naming it must
     return an actionable refusal that names the action, says it isn't a weapon

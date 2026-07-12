@@ -448,33 +448,61 @@ def _resolve_swing(
         data["on_hit"] = spec["on_hit"]
         return data
 
-    damage = roll_damage(
-        ctx.roller, spec["damage_notation"], critical=critical,
-        player_value=player_damage_value,
-    )
-    raw = damage.total
-    damage_type = spec["damage_type"]
-    if tgt["kind"] == "monster":
-        record = ctx.rules.get_monster(tgt["monster_slug"])
-        resistances, vulnerabilities, immunities = _monster_defense_sets(
-            record, damage_type, is_magical=spec["magical"]
+    # Roll + per-type mitigate the primary hit and every unconditional rider
+    # (TVA-63, e.g. the giant toad's poison bite) BEFORE touching HP. Each is
+    # mitigated against the target's defenses to ITS OWN damage type; the crit
+    # flag doubles every set of dice (5e RAW: rider dice are part of the
+    # attack).
+    def _mitigate(notation: str, dtype: str, player_value: int | None):
+        rolled = roll_damage(
+            ctx.roller, notation, critical=critical, player_value=player_value
         )
-    else:
-        res = ctx.store.get_resources(tgt["character_id"])
-        petrified = effects_for(res["conditions"], res.get("exhaustion", 0)).resist_all_damage
-        resistances = {damage_type} if petrified else set()
-        vulnerabilities = set()
-        immunities = set()
-    mitigated = apply_mitigation(
-        raw, damage_type,
-        resistances=resistances, vulnerabilities=vulnerabilities, immunities=immunities,
-    )
-    final = mitigated.final
+        if tgt["kind"] == "monster":
+            record = ctx.rules.get_monster(tgt["monster_slug"])
+            res_set, vuln_set, imm_set = _monster_defense_sets(
+                record, dtype, is_magical=spec["magical"]
+            )
+        else:
+            tres = ctx.store.get_resources(tgt["character_id"])
+            petrified = effects_for(
+                tres["conditions"], tres.get("exhaustion", 0)
+            ).resist_all_damage
+            res_set = {dtype} if petrified else set()
+            vuln_set = set()
+            imm_set = set()
+        mit = apply_mitigation(
+            rolled.total, dtype,
+            resistances=res_set, vulnerabilities=vuln_set, immunities=imm_set,
+        )
+        return rolled.total, mit
 
-    fragment = apply_damage_to_target(ctx, tgt["key"], final, damage_type, critical=critical)
+    damage_type = spec["damage_type"]
+    raw, mitigated = _mitigate(spec["damage_notation"], damage_type, player_damage_value)
     data["damage"] = {
-        "raw": raw, "final": final, "type": damage_type, "applied": mitigated.applied,
+        "raw": raw, "final": mitigated.final,
+        "type": damage_type, "applied": mitigated.applied,
     }
+    bonus = []
+    for rider in spec.get("bonus_damage", []):
+        rtype = rider["damage_type"]
+        rraw, rmit = _mitigate(rider["damage_notation"], rtype, None)
+        bonus.append({"raw": rraw, "final": rmit.final,
+                      "type": rtype, "applied": rmit.applied})
+    if bonus:
+        data["bonus_damage"] = bonus
+
+    # One swing is ONE damage event against the target's death/HP state: apply
+    # the COMBINED mitigated total in a single call so the drop-to-0 /
+    # dying-failure / massive-damage logic (and the concentration DC) fire
+    # exactly once, keyed off the swing's single `critical` flag — never once
+    # per damage type (TVA-63 review: separate calls double-counted death-save
+    # failures). Per-type narration above is unaffected. `damage_type` is
+    # unused by apply_damage_to_target (mitigation is already done), so the
+    # primary type is passed as a nominal label.
+    combined = mitigated.final + sum(b["final"] for b in bonus)
+    fragment = apply_damage_to_target(
+        ctx, tgt["key"], combined, damage_type, critical=critical
+    )
     # A damaging attack can also carry a rider (grapple, condition, save DC);
     # surface it alongside the damage for the DM to apply (TVA-57).
     if spec["on_hit"]:
@@ -486,42 +514,6 @@ def _resolve_swing(
         data["concentration_broken"] = True
     if fragment.get("defeated"):
         data["defeated"] = True
-
-    # Unconditional secondary damage (TVA-63, e.g. the giant toad's poison
-    # bite) auto-resolves at Tier 1: rolled/mitigated/applied the same way as
-    # the primary hit, stacking onto the HP the primary already lowered. A
-    # rider can itself drop/kill the target, so the target/defeated/
-    # concentration fragments are refreshed from each rider in turn.
-    bonus = []
-    for rider in spec.get("bonus_damage", []):
-        rdmg = roll_damage(
-            ctx.roller, rider["damage_notation"], critical=critical, player_value=None
-        )
-        rtype = rider["damage_type"]
-        if tgt["kind"] == "monster":
-            record = ctx.rules.get_monster(tgt["monster_slug"])
-            r_res, r_vuln, r_imm = _monster_defense_sets(
-                record, rtype, is_magical=spec["magical"]
-            )
-        else:
-            tres = ctx.store.get_resources(tgt["character_id"])
-            petr = effects_for(tres["conditions"], tres.get("exhaustion", 0)).resist_all_damage
-            r_res = {rtype} if petr else set()
-            r_vuln = set()
-            r_imm = set()
-        rmit = apply_mitigation(
-            rdmg.total, rtype, resistances=r_res, vulnerabilities=r_vuln, immunities=r_imm
-        )
-        frag = apply_damage_to_target(ctx, tgt["key"], rmit.final, rtype, critical=critical)
-        data["target"] = frag["target"]  # keep latest hp/status
-        if frag.get("defeated"):
-            data["defeated"] = True
-        if frag.get("concentration_broken"):
-            data["concentration_broken"] = True
-        bonus.append({"raw": rdmg.total, "final": rmit.final,
-                      "type": rtype, "applied": rmit.applied})
-    if bonus:
-        data["bonus_damage"] = bonus
     return data
 
 

@@ -8,7 +8,7 @@ import pytest
 
 from dm_engine.commands import registry
 from dm_engine.commands.envelope import CommandResult
-from evals.metrics import beat_done, compute_metrics, max_event_id
+from evals.metrics import beat_done, campaign_open, classify_beat_failure, compute_metrics, max_event_id
 
 
 def _boom(ctx, **kwargs) -> CommandResult:
@@ -106,3 +106,51 @@ def test_metrics_catch_each_planted_defect(event_db, fixture_transcript):
     assert m["player_messages"] == 2
     assert m["tool_calls"] == 3        # legacy "(result)" rows count as before
     assert m["tool_calls_per_player_message"] == 1.5
+
+
+# --- TVA-45: opening handshake + beat failure classification ---
+
+
+def test_campaign_open_false_before_any_open_campaign_event(party):
+    db_path = party.store.root / "campaign.sqlite"
+    assert not campaign_open(db_path)
+
+
+def test_campaign_open_true_after_successful_open_campaign_event(party):
+    ok = registry.execute("open_campaign", party, slug="t")
+    assert ok.ok
+    db_path = party.store.root / "campaign.sqlite"
+    assert campaign_open(db_path)
+
+
+def test_campaign_open_false_when_only_refused(party):
+    refused = registry.execute("open_campaign", party, slug="not-t")
+    assert not refused.ok
+    db_path = party.store.root / "campaign.sqlite"
+    assert not campaign_open(db_path)
+
+
+def test_classify_beat_failure_not_attempted(party):
+    marker = party.store.conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM event_log"
+    ).fetchone()[0]
+    # no attack rows logged after the marker at all
+    db_path = party.store.root / "campaign.sqlite"
+    detail = classify_beat_failure(
+        db_path, {"command": "attack", "ok": True}, after_id=marker
+    )
+    assert detail == {"reason": "not_attempted"}
+
+
+def test_classify_beat_failure_refused(party):
+    marker = party.store.conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM event_log"
+    ).fetchone()[0]
+    registry.execute("attack", party, attacker="Kira", target="Bandit")
+    registry.execute("attack", party, attacker="Kira", target="Bandit")
+    db_path = party.store.root / "campaign.sqlite"
+    detail = classify_beat_failure(
+        db_path, {"command": "attack", "ok": True}, after_id=marker
+    )
+    assert detail["reason"] == "refused"
+    assert detail["refusal"]  # most-recent refusal string is surfaced

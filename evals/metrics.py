@@ -30,6 +30,40 @@ def beat_done(db_path: Path, done_when: dict, *, after_id: int) -> bool:
     return row[0] > 0
 
 
+def campaign_open(db_path: Path) -> bool:
+    """True once a successful open_campaign event lands in the event log.
+
+    Same shape as beat_done: a pure query over the event log, no transcript
+    parsing. after_id=0 because the opening handshake has no prior marker —
+    any successful open_campaign in the campaign's history counts.
+    """
+    return beat_done(db_path, {"command": "open_campaign", "ok": True}, after_id=0)
+
+
+def classify_beat_failure(db_path: Path, done_when: dict, *, after_id: int) -> dict:
+    """Classify why a beat failed to reach done_when within its message budget.
+
+    Queryable from the event log only (no transcript parsing):
+    - "not_attempted": no event-log row for done_when's command after the
+      beat's marker — the DM never tried the mechanical action at all.
+    - "refused": the command was attempted but never with the desired `ok`
+      (per beat_done's semantics); the most recent attempt's refusal/digest
+      is surfaced for triage.
+
+    Callers add the "timeout" reason themselves for the turn/run-timeout
+    paths, which abort before a beat can be classified this way.
+    """
+    with _connect(db_path) as db:
+        rows = db.execute(
+            "SELECT result FROM event_log WHERE id > ? AND command = ? ORDER BY id",
+            (after_id, done_when["command"]),
+        ).fetchall()
+    if not rows:
+        return {"reason": "not_attempted"}
+    last = json.loads(rows[-1][0])
+    return {"reason": "refused", "refusal": last.get("refusal") or last.get("digest")}
+
+
 # Real commands name the acting character differently per command.
 _ACTOR_KEYS = ("actor", "caster", "character", "attacker")
 

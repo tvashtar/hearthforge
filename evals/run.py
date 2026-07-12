@@ -101,7 +101,8 @@ def grade_run_dir(run_dir: Path) -> list[dict]:
             "median_turn_s": walls[len(walls) // 2],
             "output_tokens": out_tokens,
             "beats_completed": timing["beats_completed"],
-            "beats_failed": timing["beats_failed"], "error": timing.get("error"),
+            "beats_failed": timing["beats_failed"],
+            "beat_failures": timing.get("beat_failures", []), "error": timing.get("error"),
             "metrics": metrics, "judge": judge,
         })
     return results

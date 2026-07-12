@@ -1,5 +1,6 @@
 import asyncio
 import json
+from pathlib import Path
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -10,7 +11,10 @@ from claude_agent_sdk import (
     UserMessage,
 )
 
-from evals.runner import RunResult, TranscriptWriter, _dm_turn, dm_options
+from dm_engine.commands import registry
+from evals.cells import Cell
+from evals.runner import MAX_HANDSHAKE_ATTEMPTS, RunResult, TranscriptWriter, _dm_turn, dm_options, run_cell
+from evals.scenario import Scenario
 
 
 def test_transcript_writer_appends_jsonl(tmp_path):
@@ -87,3 +91,104 @@ def test_dm_turn_records_successful_tool_results(tmp_path):
     assert res["content"] == [{"type": "text", "text": envelope}]
     assert narration == ["Rolling...", "You hit!"]
     assert result.turns[0]["usage"] == {"output_tokens": 5}
+
+
+# --- TVA-45: opening handshake, driven against a real synthetic campaign DB ---
+
+
+def _bare_scenario() -> Scenario:
+    """No party/beats: only the handshake path is under test here."""
+    return Scenario(
+        name="Handshake Test", premise="p", player_persona="pp", pc_name="Kira",
+        party=[], starting_region={}, quest={"name": "Test Quest"},
+        scene={"description": "A quiet room."}, beats=[],
+    )
+
+
+class _FakeSDKClient:
+    """Async-context-manager stub standing in for ClaudeSDKClient.
+
+    `on_query(n)` runs as a side effect of the nth `query()` call (1-indexed)
+    so tests can simulate "the DM actually called open_campaign" by writing
+    that event straight to the synthetic campaign DB through the real
+    registry — never a fabricated event-log row.
+    """
+
+    def __init__(self, options=None, *, on_query=None):
+        self.calls = 0
+        self._on_query = on_query or (lambda n: None)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def query(self, prompt):
+        self.calls += 1
+        self._on_query(self.calls)
+
+    async def receive_response(self):
+        return
+        yield  # pragma: no cover - makes this an async generator
+
+
+def _patch_common(monkeypatch, on_query=None):
+    monkeypatch.setattr("evals.runner.anthropic.Anthropic", lambda: object())
+    client_holder = {}
+
+    def factory(options=None):
+        client = _FakeSDKClient(options, on_query=on_query)
+        client_holder["client"] = client
+        return client
+
+    monkeypatch.setattr("evals.runner.ClaudeSDKClient", factory)
+    return client_holder
+
+
+def test_handshake_failure_aborts_before_any_beats(monkeypatch, tmp_path, rules_path):
+    client_holder = _patch_common(monkeypatch)  # open_campaign never called
+    result = asyncio.run(
+        run_cell(
+            Cell("haiku", "medium"), _bare_scenario(),
+            repo_root=Path(__file__).parents[2], campaigns_dir=tmp_path / "campaigns",
+            rules_db_path=rules_path, bundle_dir=tmp_path / "bundle", seed=1,
+        )
+    )
+    assert result.error == "handshake failed"
+    assert result.beats_completed == [] and result.beats_failed == []
+    # opening turn + (MAX_HANDSHAKE_ATTEMPTS - 1) nudges, never more
+    assert client_holder["client"].calls == MAX_HANDSHAKE_ATTEMPTS
+    timing = json.loads((tmp_path / "bundle" / "timing.json").read_text())
+    assert timing["error"] == "handshake failed"
+
+
+def test_handshake_succeeds_after_a_nudge_and_beats_proceed(monkeypatch, tmp_path, rules_path):
+    slug_holder = {}
+
+    def on_query(n):
+        if n == 2:  # first nudge: simulate the DM now calling open_campaign
+            ctx = registry.open_campaign_context(
+                slug_holder["campaigns_dir"], slug_holder["slug"], slug_holder["rules_path"]
+            )
+            try:
+                ok = registry.execute("open_campaign", ctx, slug=slug_holder["slug"])
+                assert ok.ok
+            finally:
+                ctx.store.close()
+
+    client_holder = _patch_common(monkeypatch, on_query=on_query)
+    campaigns_dir = tmp_path / "campaigns"
+    slug_holder.update(
+        campaigns_dir=campaigns_dir, rules_path=rules_path, slug="eval-haiku-medium-1"
+    )
+    result = asyncio.run(
+        run_cell(
+            Cell("haiku", "medium"), _bare_scenario(),
+            repo_root=Path(__file__).parents[2], campaigns_dir=campaigns_dir,
+            rules_db_path=rules_path, bundle_dir=tmp_path / "bundle", seed=1,
+        )
+    )
+    assert result.error is None
+    assert result.complete  # no beats in the bare scenario, none failed
+    assert client_holder["client"].calls == 2  # opening turn + one nudge, then it proceeded

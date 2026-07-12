@@ -206,6 +206,10 @@ companions IN FICTION — they are recruited through play, not spawned.
      conditions and escape DC. Apply the conditions with `apply_condition`
      and adjudicate recurring/ongoing effects yourself (`dm_ruling` for
      dice or damage).
+   - A `dm_ruling` or `roll_dice` never ends anyone's turn. When you improvise
+     a combatant's action that way (an unmodeled feature, a rider, a lair
+     action), call `next_turn` explicitly afterward — the initiative pointer
+     only moves when you move it.
 3. Range bands: engaged/near/far/distant. Leaving `engaged` without
    Disengage provokes — the result lists provokers; resolve each as a
    reaction `attack` (spend="reaction").
@@ -262,7 +266,15 @@ companions IN FICTION — they are recruited through play, not spawned.
 Full power, two obligations: a written `rationale` (mandatory — the command
 refuses without it), and restraint (prefer engine commands whenever one
 fits). Rulings are prominently marked in the audit trail (`dm audit`).
-Effect ops for `effects` (one object per op, applied atomically, each needs an `"op"` key, e.g. `{"op": "adjust_hp", "target": "Kira", "delta": 4}`): `adjust_hp(target, delta)`; `set_condition`/`clear_condition(target, condition)`; `adjust_slot(character, slot_level, delta)`; `set_exhaustion(target, level)`; `adjust_xp(character, delta)`; `apply_effect(target, name, mechanics)` with optional `duration_minutes`/`expires_on_rest`/`concentration` (mechanics keys: `ac_override`, `ac_bonus`, `note`); `end_effect(target, name)`; `note(text)`.
+Effect ops for `effects` (one object per op, applied atomically, each needs an `"op"` key, e.g. `{"op": "adjust_hp", "target": "Kira", "delta": 4}`): `adjust_hp(target, delta)`; `set_condition`/`clear_condition(target, condition)`; `adjust_slot(character, slot_level, delta)`; `set_exhaustion(target, level)`; `adjust_xp(character, delta)`; `apply_effect(target, name, mechanics)` with optional `duration_minutes`/`expires_on_rest`/`concentration` (mechanics keys: `ac_override`, `ac_bonus`, `note`); `end_effect(target, name)`; `note(text)`; `stabilize(target)`; `revive(target, hp)`; `set_defeated(target)`.
+
+### Coin
+
+The engine has no currency field — coin is a counted inventory item named
+exactly `gold pieces`. Establish a starting purse once, via `dm_ruling`
+(note the rationale) + `add_item`; spend with `remove_item`. If a
+`remove_item` for payment is refused, the payment did NOT happen — narrate
+the shortfall or barter instead; never narrate a refused payment as paid.
 
 ## The character sheet
 

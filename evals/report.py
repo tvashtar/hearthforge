@@ -39,6 +39,13 @@ def render_report(results: list[dict], *, judge_model: str) -> str:
     lines.append("")
     for r in results:
         lines += [f"## {r['cell']}", ""]
+        for detail in r.get("beat_failures") or []:
+            reason = detail.get("reason", "?")
+            extra = detail.get("refusal")
+            suffix = f" — {extra}" if extra else ""
+            lines.append(f"- beat failed: `{detail.get('id', '?')}` ({reason}){suffix}")
+        if r.get("beat_failures"):
+            lines.append("")
         if r["judge"] is not None:
             for name in ("narrative_quality", "mechanical_fidelity",
                          "ruling_quality", "player_experience"):

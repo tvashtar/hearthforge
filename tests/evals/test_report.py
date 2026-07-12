@@ -43,3 +43,14 @@ def test_incomplete_run_is_marked_in_beats_column():
     result["error"] = "timeout"
     md = render_report([result], judge_model="claude-opus-4-8")
     assert "(INCOMPLETE: timeout)" in md
+
+
+def test_beat_failures_are_listed_with_reason_and_refusal():
+    result = _result()
+    result["beat_failures"] = [
+        {"id": "buy-supplies", "reason": "not_attempted"},
+        {"id": "question-innkeeper", "reason": "refused", "refusal": "no such target"},
+    ]
+    md = render_report([result], judge_model="claude-opus-4-8")
+    assert "`buy-supplies` (not_attempted)" in md
+    assert "`question-innkeeper` (refused) — no such target" in md

@@ -22,11 +22,27 @@ from claude_agent_sdk import (
 )
 
 from evals.cells import Cell
-from evals.metrics import beat_done, max_event_id
+from evals.metrics import beat_done, campaign_open, classify_beat_failure, max_event_id
 from evals.player import next_player_message
 from evals.scenario import Scenario, build_campaign
 
 SKILL_PATH = Path(".claude/skills/dm-session/SKILL.md")
+
+# Opening handshake (TVA-45): a scripted opening prompt is not always enough
+# to make the DM actually call open_campaign before narrating (Fable narrated
+# first and opened late; Haiku fabricated an alternate opening and never
+# opened at all). We check the event log — not the transcript — for a
+# successful open_campaign row, and nudge on the player channel if it's
+# missing. This is a player-channel message, not a change to the DM-side
+# skill/prompt.
+MAX_HANDSHAKE_ATTEMPTS = 3  # opening turn + up to 2 nudges
+
+
+def _handshake_nudge(slug: str) -> str:
+    return (
+        f"You have not opened the campaign yet — call open_campaign for "
+        f"'{slug}' before we begin."
+    )
 
 
 class TranscriptWriter:
@@ -66,6 +82,7 @@ class RunResult:
     resolved_model: str | None = None
     beats_completed: list[str] = field(default_factory=list)
     beats_failed: list[str] = field(default_factory=list)
+    beat_failures: list[dict] = field(default_factory=list)
     complete: bool = False
     error: str | None = None
     wall_clock_s: float = 0.0
@@ -152,23 +169,47 @@ async def run_cell(
                 ),
                 timeout=turn_timeout_s,
             )
-            for beat in beats:
-                if time.monotonic() - started > run_timeout_s:
-                    raise TimeoutError("run timeout")
-                marker = max_event_id(db_path)
-                done = False
-                for _ in range(beat.max_player_messages):
-                    msg = await asyncio.to_thread(
-                        next_player_message, player, scenario, beat, narration
-                    )
-                    narration += await asyncio.wait_for(
-                        _dm_turn(client, msg, transcript, result), timeout=turn_timeout_s
-                    )
-                    if beat_done(db_path, beat.done_when, after_id=marker):
-                        done = True
-                        break
-                (result.beats_completed if done else result.beats_failed).append(beat.id)
-        result.complete = not result.beats_failed
+            for attempt in range(1, MAX_HANDSHAKE_ATTEMPTS + 1):
+                if campaign_open(db_path):
+                    break
+                if attempt == MAX_HANDSHAKE_ATTEMPTS:
+                    result.error = "handshake failed"
+                    break
+                narration += await asyncio.wait_for(
+                    _dm_turn(client, _handshake_nudge(slug), transcript, result),
+                    timeout=turn_timeout_s,
+                )
+            if result.error is None:
+                for beat in beats:
+                    if time.monotonic() - started > run_timeout_s:
+                        raise TimeoutError("run timeout")
+                    marker = max_event_id(db_path)
+                    done = False
+                    try:
+                        for _ in range(beat.max_player_messages):
+                            msg = await asyncio.to_thread(
+                                next_player_message, player, scenario, beat, narration
+                            )
+                            narration += await asyncio.wait_for(
+                                _dm_turn(client, msg, transcript, result),
+                                timeout=turn_timeout_s,
+                            )
+                            if beat_done(db_path, beat.done_when, after_id=marker):
+                                done = True
+                                break
+                    except (TimeoutError, asyncio.TimeoutError):
+                        result.beats_failed.append(beat.id)
+                        result.beat_failures.append({"id": beat.id, "reason": "timeout"})
+                        raise
+                    if done:
+                        result.beats_completed.append(beat.id)
+                    else:
+                        result.beats_failed.append(beat.id)
+                        detail = classify_beat_failure(
+                            db_path, beat.done_when, after_id=marker
+                        )
+                        result.beat_failures.append({"id": beat.id, **detail})
+                result.complete = not result.beats_failed
     except (TimeoutError, asyncio.TimeoutError):
         result.error = "timeout"
     except Exception as exc:  # cell-level failure must not sink other cells
@@ -180,7 +221,8 @@ async def run_cell(
                 {"cell": cell.slug, "resolved_model": result.resolved_model,
                  "wall_clock_s": result.wall_clock_s, "turns": result.turns,
                  "beats_completed": result.beats_completed,
-                 "beats_failed": result.beats_failed, "error": result.error},
+                 "beats_failed": result.beats_failed,
+                 "beat_failures": result.beat_failures, "error": result.error},
                 indent=2,
             )
         )

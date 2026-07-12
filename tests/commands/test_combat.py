@@ -23,6 +23,68 @@ def test_start_combat_builds_order_and_reports_difficulty(ctx):
     assert result.data["encounter"]["adjusted_xp"] > 0
 
 
+# --- start_combat / next_turn digests (TVA-44) --------------------------------
+
+def test_start_combat_digest_reads_initiative_order_aloud(ctx):
+    """Initiative is public at a real table: the digest must be ready to
+    read aloud, using display names (not internal keys) and totals."""
+    result = _start(ctx, monsters=[{"slug": "goblin", "count": 2, "label": "Fen Scout"}])
+    assert result.ok, result.refusal
+    order = result.data["order"]
+    expected = " → ".join(f"{o['name']} ({o['initiative']})" for o in order)
+    assert f"Initiative: {expected}" in result.digest
+    # internal keys never leak into the read-aloud line
+    assert "goblin-1" not in result.digest and "goblin-2" not in result.digest
+
+
+def test_next_turn_digest_uses_display_name_and_previews_next(ctx):
+    _start(ctx, monsters=[{"slug": "goblin", "count": 2, "label": "Fen Scout"}])
+    result = registry.execute("next_turn", ctx)
+    assert result.ok
+    combat = ctx.store.combat()
+    n = len(combat["combatants"])
+    idx = combat["turn_index"]
+    active = combat["combatants"][idx]
+    next_actor = combat["combatants"][(idx + 1) % n]  # none defeated: simply the next seat
+    assert result.digest == f"Round {combat['round']} — {active['name']}'s turn (next: {next_actor['name']})"
+    # the internal key never leaks into the read-aloud digest
+    assert active["key"] not in result.digest or active["key"] == active["name"]
+
+
+def test_next_turn_digest_preview_skips_defeated(ctx):
+    """The 'next:' preview must skip defeated combatants, not just announce
+    whoever is physically next in the order."""
+    _start(ctx, monsters=[{"slug": "goblin", "count": 2, "label": "Fen Scout"}])
+    combat = ctx.store.combat()
+    idx = combat["turn_index"]
+    n = len(combat["combatants"])
+    immediate_next = combat["combatants"][(idx + 1) % n]
+    immediate_next["defeated"] = True
+    ctx.store.update_combat(combatants=combat["combatants"])
+    ctx.store.conn.commit()
+    result = registry.execute("next_turn", ctx)
+    assert result.ok
+    assert f"(next: {immediate_next['name']})" not in result.digest
+    combat_after = ctx.store.combat()
+    later = combat_after["combatants"][(combat_after["turn_index"] + 1) % n]
+    assert f"(next: {later['name']})" in result.digest
+
+
+def test_next_turn_digest_no_preview_when_sole_survivor(ctx):
+    """No distinct 'next' actor to preview when everyone else is defeated."""
+    _start(ctx)
+    combat = ctx.store.combat()
+    idx = combat["turn_index"]
+    for i, c in enumerate(combat["combatants"]):
+        if i != idx:
+            c["defeated"] = True
+    ctx.store.update_combat(combatants=combat["combatants"])
+    ctx.store.conn.commit()
+    result = registry.execute("next_turn", ctx)
+    assert result.ok
+    assert "(next:" not in result.digest
+
+
 def test_start_combat_twice_refused(ctx):
     _start(ctx)
     assert _start(ctx).ok is False
@@ -63,7 +125,8 @@ def test_next_turn_advances_and_resets_budget(ctx):
     assert result.ok
     after = ctx.store.combat()
     assert after["turn_index"] == (first["turn_index"] + 1) % len(first["combatants"])
-    assert result.data["budget"]["action_available"] is True
+    active = next(c for c in result.data["order"] if c["key"] == result.data["active"])
+    assert active["budget"]["action_available"] is True
 
 
 def test_end_combat_awards_xp_for_defeated(ctx):
@@ -190,12 +253,11 @@ def test_next_turn_resets_reactions_each_round(ctx):
     assert all(c["reaction_used"] is False for c in after["combatants"])
 
 
-# --- next_turn combat snapshot (TVA-18) --------------------------------------
+# --- next_turn combat snapshot (TVA-18, slimmed TVA-40) ----------------------
 
 def test_next_turn_includes_combat_snapshot(ctx):
-    """next_turn must carry the same compact snapshot get_scene_state builds
-    (order with live HP/conditions/bands, budgets) so no per-turn poll is
-    needed."""
+    """next_turn must carry a compact snapshot (order with live HP/
+    conditions/bands) so no per-turn poll is needed."""
     _start(ctx)
     result = registry.execute("next_turn", ctx)
     assert result.ok
@@ -209,8 +271,62 @@ def test_next_turn_includes_combat_snapshot(ctx):
     assert "engaged_with" in kira
     goblin = next(c for c in data["order"] if c["key"] == "goblin-1")
     assert goblin["hp"] == 7
-    assert set(data["budgets"]) == keys
-    assert data["budgets"][data["active"]] == data["budget"]
+
+
+def test_next_turn_snapshot_is_slim(ctx):
+    """TVA-40: no duplicate budgets{} map, no redundant top-level budget/kind,
+    and every order[] row exposes exactly the fields a DM needs turn-to-turn
+    — plus a budget only on the acting combatant's row. Pinning the exact key
+    set means the payload cannot silently regrow."""
+    _start(ctx)
+    result = registry.execute("next_turn", ctx)
+    data = result.data
+    assert set(data) == {"round", "turn_index", "active", "order"}
+    row_fields = {
+        "key", "name", "kind", "initiative", "hp", "max_hp",
+        "band", "engaged_with", "conditions", "defeated",
+    }
+    for row in data["order"]:
+        if row["key"] == data["active"]:
+            assert set(row) == row_fields | {"budget"}
+        else:
+            assert set(row) == row_fields
+
+
+def test_next_turn_snapshot_payload_shrinks_by_half(ctx):
+    """TVA-40: a 4-combatant next_turn snapshot must be at least 50% smaller
+    than the pre-slim shape (order rows carrying every static field 3x over,
+    plus a duplicate budgets{} map and top-level budget)."""
+    import json
+
+    _start(ctx)
+    result = registry.execute("next_turn", ctx)
+    combat = ctx.store.combat()
+    idx = combat["turn_index"]
+    combatants = combat["combatants"]
+
+    # Reconstruct the pre-slim payload shape from the same live data.
+    old_order = []
+    old_budgets = {}
+    for c in combatants:
+        dump = dict(c)
+        if c["kind"] == "character":
+            res = ctx.store.get_resources(c["character_id"])
+            dump["hp"] = res["hp"]
+            dump["max_hp"] = ctx.store.get_character_by_id(c["character_id"])["max_hp"]
+            dump["conditions"] = res["conditions"]
+        old_order.append(dump)
+        old_budgets[c["key"]] = c["budget"]
+    old_payload = {
+        "round": combat["round"], "turn_index": idx,
+        "active": combatants[idx]["key"], "order": old_order,
+        "budgets": old_budgets, "kind": combatants[idx]["kind"],
+        "budget": combatants[idx]["budget"],
+    }
+
+    old_size = len(json.dumps(old_payload))
+    new_size = len(json.dumps(result.data))
+    assert new_size <= old_size * 0.5, (old_size, new_size)
 
 
 # --- move refusal quality (TVA-27) -------------------------------------------
@@ -268,7 +384,8 @@ def _assert_no_round_one_budget(ctx, key):
         ctx.store.update_combat(turn_index=idx - 1)
         ctx.store.conn.commit()
         result = registry.execute("next_turn", ctx)
-        assert result.data["budget"] is None
+        active_row = next(c for c in result.data["order"] if c["key"] == result.data["active"])
+        assert active_row["budget"] is None
 
 
 def test_surprised_combatant_gets_no_budget_in_round_one(ctx):

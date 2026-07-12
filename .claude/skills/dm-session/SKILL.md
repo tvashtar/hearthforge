@@ -130,15 +130,20 @@ companions IN FICTION — they are recruited through play, not spawned.
    must match a combatant key or label — unmatched names refuse. The result
    includes the advisory difficulty — report it to yourself; you may
    deliberately deviate from a fair fight, but say why in the narration
-   (the deviation is logged).
+   (the deviation is logged). Initiative order is public at a real table —
+   its digest reads the rolled order aloud with display names ("Initiative:
+   Kira (19) → Fen Scout (17) → Brother Aldric (3)"); announce it to the
+   player in-fiction before the first turn.
 2. Drive turns from what results already told you: `next_turn` returns the
-   full combat snapshot — the actor, its budget, and the whole order with
-   live HP, conditions, bands, and engagements — and every attack/move
-   result reports the HP and positions it changed, so you never need a
-   per-turn poll. A monster or companion turn is ONE beat: its
-   commands back-to-back (`move`/`engage`/`attack`/…), then one or two
-   sentences of narration built from the digests, and only THEN
-   `next_turn` for the next actor. Narrate play-by-play, not in arrears:
+   acting combatant, its budget, and the whole order with live HP,
+   conditions, bands, and engagements — and every attack/move result
+   reports the HP and positions it changed, so you never need a per-turn
+   poll. Its digest also previews who is up next ("Round 2 — Fen Scout
+   2's turn (next: Brother Aldric)") — on each PC turn, remind the player
+   who is up next so they aren't left guessing. A monster or companion turn
+   is ONE beat: its commands back-to-back (`move`/`engage`/`attack`/…),
+   then one or two sentences of narration built from the digests, and only
+   THEN `next_turn` for the next actor. Narrate play-by-play, not in arrears:
    the player watches the fight unfold actor by actor, so never chain a
    second actor's commands before the previous actor's narration has been
    emitted — a silent multi-turn tool-call run that ends in one big

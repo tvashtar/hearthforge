@@ -13,7 +13,12 @@ from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import AttackSpec, normalize_slug
 from dm_engine.rules.character_build import build_proficiencies, derive_attack
 from dm_engine.rules.checks import ability_modifier
-from dm_engine.rules.progression import level_for_xp, level_up_hp_gain, max_hp_for_level
+from dm_engine.rules.progression import (
+    level_for_xp,
+    level_up_hp_gain,
+    max_hp_for_level,
+    xp_for_level,
+)
 from dm_engine.state.sheets import render_character_sheet
 
 _ROLES = ("pc", "companion")
@@ -156,6 +161,7 @@ def create_character(
 
     cid = ctx.store.insert_character(
         name=name, role=role, class_slug=class_slug, race_slug=race_slug, level=level,
+        xp=xp_for_level(level),  # RAW minimum for the level, so award_xp stays on-book
         abilities=abilities, max_hp=max_hp, ac=ac, speed=speed,
         proficiencies=profs.model_dump(), attacks=resolved_attacks, spells_known=spells_known,
         spell_slots=spell_slots,

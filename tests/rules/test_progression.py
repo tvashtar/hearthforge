@@ -5,6 +5,7 @@ from dm_engine.rules.progression import (
     level_for_xp,
     level_up_hp_gain,
     max_hp_for_level,
+    xp_for_level,
     xp_to_next_level,
 )
 
@@ -30,6 +31,19 @@ def test_level_for_xp_boundaries():
     assert level_for_xp(9_999_999) == 20
     with pytest.raises(ValueError):
         level_for_xp(-1)
+
+
+def test_xp_for_level_is_the_inverse_of_level_for_xp():
+    assert xp_for_level(1) == 0
+    assert xp_for_level(2) == 300
+    assert xp_for_level(3) == 900
+    assert xp_for_level(20) == 355000
+    for level in range(1, 21):
+        assert level_for_xp(xp_for_level(level)) == level
+    with pytest.raises(ValueError):
+        xp_for_level(0)
+    with pytest.raises(ValueError):
+        xp_for_level(21)
 
 
 def test_xp_to_next_level():

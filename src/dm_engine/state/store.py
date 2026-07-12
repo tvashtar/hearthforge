@@ -293,12 +293,13 @@ class CampaignStore:
         attacks: list[dict],
         spells_known: list[str],
         spell_slots: dict,
+        xp: int = 0,
     ) -> int:
         cur = self.conn.execute(
-            "INSERT INTO characters (name, role, class_slug, race_slug, level,"
+            "INSERT INTO characters (name, role, class_slug, race_slug, level, xp,"
             " abilities, max_hp, ac, speed, proficiencies, attacks, spells_known)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, role, class_slug, race_slug, level, json.dumps(abilities),
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (name, role, class_slug, race_slug, level, xp, json.dumps(abilities),
              max_hp, ac, speed, json.dumps(proficiencies), json.dumps(attacks),
              json.dumps(spells_known)),
         )

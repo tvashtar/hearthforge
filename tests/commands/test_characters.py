@@ -288,12 +288,19 @@ def test_create_character_level_derives_hp_and_slots(ctx):
     assert result.ok, result.refusal
     char = ctx.store.get_character("Brother Aldric")
     assert char["level"] == 3
+    assert char["xp"] == 900  # seeded to the RAW threshold for level 3
     assert char["max_hp"] == 24  # d8 + CON 2 at level 1, +2 levels of (4+1+2)=7
     res = ctx.store.get_resources(char["id"])
     assert res["spell_slots"] == {
         "1": {"max": 4, "remaining": 4}, "2": {"max": 2, "remaining": 2},
     }
     assert res["hit_dice_remaining"] == 3
+    # award_xp is on-book from the seeded value: 900 + 1800 = 2700 -> level 4,
+    # not a spurious multi-level jump from xp=0.
+    award = registry.execute("award_xp", ctx, amount=1800, reason="quest")
+    assert award.ok
+    char = ctx.store.get_character("Brother Aldric")
+    assert (char["xp"], char["level"]) == (2700, 4)
 
 
 def test_create_character_unknown_level_refused(ctx):

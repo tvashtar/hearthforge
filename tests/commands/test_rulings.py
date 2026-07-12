@@ -130,6 +130,30 @@ def test_ruling_unknown_op_refusal_lists_valid_ops(ctx):
         assert op in result.refusal
 
 
+def test_ruling_missing_op_refusal_echoes_keys_and_an_example(ctx):
+    # TVA-37: a missing "op" key must echo the keys the caller actually sent
+    # and show a worked example, not just "unknown op None".
+    result = registry.execute(
+        "dm_ruling", ctx, description="Odd effect", rationale="testing",
+        effects=[{"adjust_hp": ["Kira", 4]}],
+    )
+    assert result.ok is False
+    assert "unknown op None" not in result.refusal
+    assert "got keys" in result.refusal and "['adjust_hp']" in result.refusal
+    assert '{"op": "adjust_hp", "target": "Kira", "delta": 4}' in result.refusal
+
+
+def test_ruling_unknown_op_refusal_also_echoes_keys_and_example(ctx):
+    result = registry.execute(
+        "dm_ruling", ctx, description="Odd effect", rationale="testing",
+        effects=[{"op": "teleport", "target": "Kira"}],
+    )
+    assert result.ok is False
+    assert "got keys" in result.refusal
+    assert "['op', 'target']" in result.refusal
+    assert '{"op": "adjust_hp", "target": "Kira", "delta": 4}' in result.refusal
+
+
 def test_ruling_unknown_condition_refusal_lists_vocabulary(ctx):
     result = registry.execute(
         "dm_ruling", ctx, description="Nap", rationale="testing",

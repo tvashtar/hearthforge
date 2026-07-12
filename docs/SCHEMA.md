@@ -129,8 +129,12 @@ current `location_slug`, and the free-text `scene` description set by
 ### `session_recaps`
 
 Append-only narrative memory: `kind IN ('session_end','checkpoint')` and
-`content`. `end_session` writes the former; the ~20-event crash-insurance
-`checkpoint` command writes the latter. `get_campaign_brief` surfaces the
+`content`. `end_session` writes the former; the crash-insurance
+`checkpoint` command writes the latter — `registry.execute` (TVA-41) calls
+it itself once ~20 events (`AUTO_CHECKPOINT_INTERVAL`) have accumulated
+since the last one, prefixing the mechanical recap `content` with `[auto]`
+to distinguish it from a DM-authored checkpoint; the DM may still
+checkpoint manually at dramatic beats. `get_campaign_brief` surfaces the
 newest recap on reopen.
 
 ### `event_log` — the audit trail (FC-6, append-only)

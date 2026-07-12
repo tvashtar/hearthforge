@@ -23,6 +23,11 @@ from dm_engine.state.store import CampaignStore
 
 _COMMANDS: dict[str, Callable[..., CommandResult]] = {}
 
+# FC-7: "auto mini-recap checkpoint every ~20 events" — crash insurance must
+# not depend on the DM model remembering to call `checkpoint` (TVA-41).
+AUTO_CHECKPOINT_INTERVAL = 20
+AUTO_CHECKPOINT_PREFIX = "[auto] "
+
 
 def command(name: str) -> Callable:
     def register(fn: Callable[..., CommandResult]) -> Callable[..., CommandResult]:
@@ -115,7 +120,44 @@ def execute(name: str, ctx: CommandContext, /, **kwargs) -> CommandResult:
         # exceptions are bugs, never gameplay).
         _append_crash_event(ctx, name, kwargs, exc)
         raise
+    # TVA-41: cadence lives in the engine, not the DM model. Runs only after
+    # the triggering command's own transaction has fully committed, as its
+    # own separate registry-audited `checkpoint` call — one command, one
+    # transaction, per FC-6. Excluding `checkpoint` itself is the recursion
+    # guard: without it, a checkpoint that crosses the threshold would try
+    # to fire another checkpoint; with it, checkpoints (auto or manual)
+    # always reset the counter to zero and never re-trigger themselves.
+    if result.ok and name != "checkpoint":
+        _maybe_auto_checkpoint(ctx)
     return result
+
+
+def _maybe_auto_checkpoint(ctx: CommandContext) -> None:
+    if ctx.store.events_since_last_checkpoint() < AUTO_CHECKPOINT_INTERVAL:
+        return
+    content = AUTO_CHECKPOINT_PREFIX + _mechanical_recap(ctx.store)
+    execute("checkpoint", ctx, content=content)
+
+
+def _mechanical_recap(store: CampaignStore) -> str:
+    """Behind-the-screen mechanical snapshot (gm_only via `checkpoint`):
+    scene, clock, party HP/conditions, combat status — no narrative prose."""
+    clock = store.world_clock()
+    combat = store.combat()
+    combat_bit = (
+        f"combat active (round {combat['round']})" if combat["active"] else "no combat"
+    )
+    party_bits = []
+    for char in store.party():
+        res = store.get_resources(char["id"])
+        conditions = ", ".join(res["conditions"]) if res["conditions"] else "no conditions"
+        party_bits.append(f"{char['name']} {res['hp']}/{char['max_hp']} HP ({conditions})")
+    party_bit = "; ".join(party_bits) if party_bits else "no party yet"
+    scene = clock.get("scene") or "unset"
+    return (
+        f"Day {clock['day']}, minute {clock['minutes']} — scene: {scene}; "
+        f"{combat_bit}. Party: {party_bit}."
+    )
 
 
 def _append_crash_event(

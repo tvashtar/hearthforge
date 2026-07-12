@@ -275,8 +275,13 @@ def test_goblin_ambush_gate(tmp_path, rules_path):
 
         # --- event-log completeness ------------------------------------------
         # bootstrap wrote 1 event; every Driver call (success or refusal) wrote
-        # exactly one more. Forced update_combat setup writes never log events.
-        assert ctx.store.event_count() == 1 + run.calls
+        # exactly one more; TVA-41 auto-checkpoints (not issued by the Driver,
+        # so not in run.calls) may add a few more once ~20 events accumulate.
+        # Forced update_combat setup writes never log events.
+        auto_checkpoints = sum(
+            1 for e in ctx.store.events_tail(1000) if e["command"] == "checkpoint"
+        )
+        assert ctx.store.event_count() == 1 + run.calls + auto_checkpoints
     finally:
         ctx.store.close()
 

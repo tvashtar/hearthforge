@@ -252,8 +252,13 @@ def test_headless_multi_round_combat(tmp_path, rules_path):
         assert ctx.store.combat()["active"] == 0
 
         # --- event-log completeness -----------------------------------------
-        # bootstrap wrote 1 event; every command since wrote exactly 1 more.
-        assert ctx.store.event_count() == 1 + run.calls
+        # bootstrap wrote 1 event; every command since wrote exactly 1 more;
+        # TVA-41 auto-checkpoints (not issued via the Driver, so not counted
+        # in run.calls) may add a few more once ~20 events accumulate.
+        auto_checkpoints = sum(
+            1 for e in ctx.store.events_tail(1000) if e["command"] == "checkpoint"
+        )
+        assert ctx.store.event_count() == 1 + run.calls + auto_checkpoints
 
         kira_xp = ctx.store.get_character("Kira")["xp"]
         kira_hp = _kira_resources(ctx)["hp"]

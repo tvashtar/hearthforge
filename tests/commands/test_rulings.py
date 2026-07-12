@@ -178,6 +178,31 @@ def test_adjust_hp_breaks_concentration_on_knockout(ctx, party):
     assert result.data["applied"][0]["concentration_broken"] is True
 
 
+def test_adjust_hp_heal_refuses_hardcore_dead(ctx, party):
+    # TVA-53: routing heals through _apply_healing would otherwise revive a
+    # hardcore-dead PC (reset death_saves.dead, drop unconscious, un-defeat)
+    # while status stays "dead" — inconsistent, and a permadead PC must not
+    # be resurrectable by ruling. Refuse before any state changes.
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 3, "stable": False, "dead": True},
+    )
+    ctx.store.update_character(kira["id"], status="dead")
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="A cleric prays over Kira's corpse",
+        rationale="testing revival guard",
+        effects=[{"op": "adjust_hp", "target": "Kira", "delta": 5}],
+    )
+    assert result.ok is False
+    assert "dead" in result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert res["death_saves"]["dead"] is True
+    assert ctx.store.get_character_by_id(kira["id"])["status"] == "dead"
+
+
 def test_ruling_set_exhaustion_refuses_for_monster_target(ctx):
     registry.execute("start_combat", ctx,
                      monsters=[{"slug": "goblin", "count": 1, "band": "near"}],

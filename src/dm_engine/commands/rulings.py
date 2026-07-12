@@ -131,6 +131,11 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
         rkind, first, _ = _resolve_target(ctx, target)
         if rkind in ("unknown", "ambiguous"):
             return _target_refusal(ctx, target, rkind, first)
+        # A heal (delta >= 0) now revives a character at 0 HP (TVA-53). A
+        # hardcore-dead PC must not be resurrectable by ruling — mirror the
+        # guard cast_spell uses (spells.py), refusing before the batch applies.
+        if delta >= 0 and rkind == "character" and first["status"] == "dead":
+            return f"{target} is dead — revival is not possible in a hardcore campaign"
         return None
 
     if kind in ("set_condition", "clear_condition"):

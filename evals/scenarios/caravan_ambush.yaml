@@ -30,6 +30,7 @@ party:
     ac: 18
     proficiencies: {skills: [medicine, religion]}
     attacks: [{weapon: mace, name: mace}]
+    spells_known: [bless, healing-word, cure-wounds, sacred-flame, guiding-bolt]
 starting_region:
   locations:
     - slug: bracken-hollow

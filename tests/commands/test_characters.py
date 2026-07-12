@@ -271,3 +271,59 @@ def test_create_character_refuses_non_bool_weapon_proficient(ctx):
     kwargs = {**ROGUE_KWARGS, "attacks": [{"weapon": "longsword", "proficient": 42}]}
     result = registry.execute("create_character", ctx, **kwargs)
     assert result.ok is False
+
+
+# --- level param (TVA-34) ---------------------------------------------------
+
+
+def test_create_character_level_derives_hp_and_slots(ctx):
+    result = registry.execute(
+        "create_character", ctx, name="Brother Aldric", role="companion",
+        class_slug="cleric", race_slug="hill-dwarf", level=3,
+        abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15, "cha": 12},
+        ac=18, proficiencies={"skills": ["medicine", "religion"]},
+        attacks=[{"weapon": "mace", "name": "mace"}],
+        spells_known=["cure-wounds", "bless", "guiding-bolt", "sacred-flame"],
+    )
+    assert result.ok, result.refusal
+    char = ctx.store.get_character("Brother Aldric")
+    assert char["level"] == 3
+    assert char["xp"] == 900  # seeded to the RAW threshold for level 3
+    assert char["max_hp"] == 24  # d8 + CON 2 at level 1, +2 levels of (4+1+2)=7
+    res = ctx.store.get_resources(char["id"])
+    assert res["spell_slots"] == {
+        "1": {"max": 4, "remaining": 4}, "2": {"max": 2, "remaining": 2},
+    }
+    assert res["hit_dice_remaining"] == 3
+    # award_xp is on-book from the seeded value: 900 + 1800 = 2700 -> level 4,
+    # not a spurious multi-level jump from xp=0.
+    award = registry.execute("award_xp", ctx, amount=1800, reason="quest")
+    assert award.ok
+    char = ctx.store.get_character("Brother Aldric")
+    assert (char["xp"], char["level"]) == (2700, 4)
+
+
+def test_create_character_unknown_level_refused(ctx):
+    bad = {**FIGHTER_KWARGS, "level": 99}
+    result = registry.execute("create_character", ctx, **bad)
+    assert result.ok is False and "level" in result.refusal.lower()
+    assert ctx.store.get_character("Kira") is None
+
+
+def test_create_character_bad_spell_slug_refused(ctx):
+    kwargs = {
+        **_cleric_kwargs(),
+        "spells_known": ["bless", "not-a-real-spell"],
+    }
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+    assert "not-a-real-spell" in result.refusal
+    assert ctx.store.get_character("Aldric") is None
+
+
+def test_create_character_spell_not_castable_by_class_refused(ctx):
+    # fireball is sorcerer/wizard only, not on the cleric spell list
+    kwargs = {**_cleric_kwargs(), "spells_known": ["bless", "fireball"]}
+    result = registry.execute("create_character", ctx, **kwargs)
+    assert result.ok is False
+    assert "fireball" in result.refusal

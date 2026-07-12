@@ -54,23 +54,24 @@ def party(ctx):
     )
     registry.execute(
         "create_character", ctx, name="Brother Aldric", role="companion",
-        class_slug="cleric", race_slug="hill-dwarf",
+        class_slug="cleric", race_slug="hill-dwarf", level=3,
         abilities={"str": 14, "dex": 8, "con": 15, "int": 10, "wis": 15, "cha": 12},
         ac=18, proficiencies={"skills": ["medicine", "religion"]},
         attacks=[{"weapon": "mace", "name": "mace"}],
+        # hold-person is on the cleric list (2nd level -> needs his 2nd-level
+        # slot); burning-hands is not, so it's added below via a direct store
+        # write, bypassing create_character's class-castability check.
         spells_known=["cure-wounds", "bless", "guiding-bolt", "sacred-flame",
-                      "burning-hands", "hold-person"],
+                      "hold-person"],
     )
-    # Brother Aldric must be a level-3 cleric so he has 2nd-level slots
-    # (needed for hold-person). Deterministic direct store writes — fixtures
-    # aren't gameplay, so we bypass the XP-splitting award_xp path (which would
-    # also level Kira). Level-3 cleric: HP 24 (d8 + CON 2, +2 levels of 7),
-    # hit dice 3, slots {1: 4, 2: 2}.
+    # Some spell-mechanics tests exercise the AoE/save-halves resolver path
+    # via burning-hands, which is wizard/sorcerer-only in the SRD. Aldric
+    # doesn't actually know it in-fiction; this is a direct store write for
+    # test convenience (same pattern test_fire_bolt uses for fire-bolt),
+    # not something create_character would ever accept.
     aldric = ctx.store.get_character("Brother Aldric")
-    ctx.store.update_character(aldric["id"], level=3, xp=900, max_hp=24)
-    ctx.store.update_resources(
-        aldric["id"], hp=24, hit_dice_remaining=3,
-        spell_slots={"1": {"max": 4, "remaining": 4}, "2": {"max": 2, "remaining": 2}},
+    ctx.store.update_character(
+        aldric["id"], spells_known=aldric["spells_known"] + ["burning-hands"]
     )
     ctx.store.conn.commit()
     return ctx

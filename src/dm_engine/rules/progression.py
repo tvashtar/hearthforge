@@ -23,6 +23,13 @@ def level_for_xp(xp: int) -> int:
     return level
 
 
+def xp_for_level(level: int) -> int:
+    """Minimum cumulative XP for `level` — the inverse of level_for_xp."""
+    if not 1 <= level <= 20:
+        raise ValueError(f"level out of range: {level}")
+    return XP_THRESHOLDS[level - 1]
+
+
 def xp_to_next_level(xp: int) -> int | None:
     """XP still needed for the next level; None at level 20."""
     level = level_for_xp(xp)

@@ -13,7 +13,12 @@ from dm_engine.commands.registry import CommandContext, command
 from dm_engine.models.character import AttackSpec, normalize_slug
 from dm_engine.rules.character_build import build_proficiencies, derive_attack
 from dm_engine.rules.checks import ability_modifier
-from dm_engine.rules.progression import level_for_xp, level_up_hp_gain, max_hp_for_level
+from dm_engine.rules.progression import (
+    level_for_xp,
+    level_up_hp_gain,
+    max_hp_for_level,
+    xp_for_level,
+)
 from dm_engine.state.sheets import render_character_sheet
 
 _ROLES = ("pc", "companion")
@@ -94,6 +99,7 @@ def create_character(
     attacks: list[dict],
     speed: int = 30,
     spells_known: list[str] | None = None,
+    level: int = 1,
     **kwargs,
 ) -> CommandResult:
     spells_known = spells_known or []
@@ -106,6 +112,23 @@ def create_character(
     class_record = ctx.rules.get_class(class_slug)
     if class_record is None or ctx.rules.get_class_level(class_slug, 1) is None:
         return refuse("create_character", f"unknown class {class_slug!r}")
+    if ctx.rules.get_class_level(class_slug, level) is None:
+        return refuse(
+            "create_character", f"unknown level {level} for class {class_slug!r}"
+        )
+    bad_spells = []
+    for slug in spells_known:
+        spell = ctx.rules.get_spell(slug)
+        if spell is None:
+            bad_spells.append(slug)
+        elif spell.classes and class_slug not in {c["index"] for c in spell.classes}:
+            bad_spells.append(slug)
+    if bad_spells:
+        return refuse(
+            "create_character",
+            f"spells_known has unknown or uncastable-by-{class_slug} slugs: "
+            f"{', '.join(bad_spells)}",
+        )
     missing = [k for k in _ABILITY_KEYS if k not in abilities]
     if missing:
         return refuse(
@@ -130,14 +153,15 @@ def create_character(
     if reason:
         return refuse("create_character", reason)
 
-    # Derive level-1 stats.
+    # Derive level stats.
     hit_die = class_record["hit_die"]
     con_mod = ability_modifier(abilities["con"])
-    max_hp = max_hp_for_level(hit_die, con_mod, 1)
-    spell_slots = ctx.rules.spell_slots_for(class_slug, 1)
+    max_hp = max_hp_for_level(hit_die, con_mod, level)
+    spell_slots = ctx.rules.spell_slots_for(class_slug, level)
 
     cid = ctx.store.insert_character(
-        name=name, role=role, class_slug=class_slug, race_slug=race_slug, level=1,
+        name=name, role=role, class_slug=class_slug, race_slug=race_slug, level=level,
+        xp=xp_for_level(level),  # RAW minimum for the level, so award_xp stays on-book
         abilities=abilities, max_hp=max_hp, ac=ac, speed=speed,
         proficiencies=profs.model_dump(), attacks=resolved_attacks, spells_known=spells_known,
         spell_slots=spell_slots,

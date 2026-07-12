@@ -375,3 +375,52 @@ def death_save(
     }
     digest = f"{character} death save: natural {natural} ({outcome.event}){status_note}"
     return CommandResult(ok=True, command="death_save", digest=digest, data=data)
+
+
+@command("stabilize")
+def stabilize(
+    ctx: CommandContext,
+    character: str,
+    medicine_by: str | None = None,
+    player_value: int | None = None,
+    gm_only: bool = False,
+    **kwargs,
+) -> CommandResult:
+    """Stabilize a dying character: optional Medicine check (DC 10) by
+    `medicine_by`; without a checker it is DM fiat (Spare the Dying etc.)."""
+    char = ctx.store.get_character(character)
+    if char is None:
+        return refuse("stabilize", f"no character named {character!r}")
+    resources = ctx.store.get_resources(char["id"])
+    ds = resources["death_saves"]
+    if resources["hp"] > 0 or ds["stable"] or ds["dead"] or char["status"] != "active":
+        return refuse(
+            "stabilize", f"{character} is not dying (0 hp, not yet stable or dead)"
+        )
+    check_data = None
+    if medicine_by is not None:
+        result = skill_check(
+            ctx, character=medicine_by, skill="medicine", dc=10,
+            player_value=player_value, gm_only=gm_only,
+        )
+        if not result.ok:
+            return refuse("stabilize", result.refusal)
+        check_data = result.data
+        if not check_data["success"]:
+            digest = (
+                f"{medicine_by} fails to stabilize {character} "
+                f"(Medicine {check_data['total']} vs DC 10)"
+            )
+            return CommandResult(
+                ok=True, command="stabilize", digest=digest,
+                data={"stabilized": False, "check": check_data}, gm_only=gm_only,
+            )
+    ctx.store.update_resources(
+        char["id"], death_saves=DeathSaveState(stable=True).model_dump()
+    )
+    by = f" by {medicine_by}" if medicine_by else ""
+    digest = f"{character} is stabilized{by} — 0 HP, unconscious, no longer dying"
+    return CommandResult(
+        ok=True, command="stabilize", digest=digest,
+        data={"stabilized": True, "check": check_data}, gm_only=gm_only,
+    )

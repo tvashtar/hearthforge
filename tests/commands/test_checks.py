@@ -327,6 +327,83 @@ def test_death_save_player_value_refused_for_companion(ctx):
     assert result.ok is False and "player" in result.refusal.lower()
 
 
+# -- own tests: stabilize -----------------------------------------------------
+
+
+def test_stabilize_refuses_when_not_dying(ctx, party):
+    # Kira at full hp -> refused; requirement is named in the refusal.
+    result = registry.execute("stabilize", ctx, character="Kira",
+                              medicine_by="Brother Aldric")
+    assert result.ok is False
+    assert "dying" in result.refusal.lower()
+
+
+def test_stabilize_unknown_character_refused(ctx, party):
+    result = registry.execute("stabilize", ctx, character="Nobody")
+    assert result.ok is False and "nobody" in result.refusal.lower()
+
+
+def test_stabilize_with_medicine_check_success(ctx, party):
+    # Aldric (companion, Medicine +4) rolls a natural 13 on the seeded
+    # roller's first d20 -> total 17, beats DC 10.
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    result = registry.execute("stabilize", ctx, character="Kira",
+                              medicine_by="Brother Aldric", player_value=None)
+    assert result.ok, result.refusal
+    assert result.data["stabilized"] is True
+    assert result.data["check"]["success"] is True
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is True
+    assert res["hp"] == 0
+    assert "unconscious" in res["conditions"]
+
+
+def test_stabilize_medicine_check_failure(ctx, party):
+    # Advance the seeded roller past its first 7 draws (13,13,7,20,6,8,8) so
+    # the 8th natural is 5: 5 + 4 (Aldric's Medicine modifier) = 9 < DC 10.
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    for _ in range(7):
+        ctx.roller.roll("1d20")
+    result = registry.execute("stabilize", ctx, character="Kira",
+                              medicine_by="Brother Aldric")
+    assert result.ok, result.refusal  # a failed check is not a refusal
+    assert result.data["stabilized"] is False
+    assert result.data["check"]["success"] is False
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is False
+    assert res["hp"] == 0
+
+
+def test_stabilize_without_checker_is_dm_fiat(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    result = registry.execute("stabilize", ctx, character="Kira")
+    assert result.ok, result.refusal
+    assert result.data["stabilized"] is True
+    assert result.data["check"] is None
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is True
+    assert res["hp"] == 0
+
+
+def test_stabilize_medicine_by_player_value_refused_for_companion(ctx, party):
+    # medicine_by is Brother Aldric, a companion: player_value must be
+    # refused per _validate_player_value, and the refusal propagates.
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    result = registry.execute("stabilize", ctx, character="Kira",
+                              medicine_by="Brother Aldric", player_value=12)
+    assert result.ok is False and "player" in result.refusal.lower()
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is False  # refused before any mutation
+
+
 # -- own tests / binding tests: monster skill_check --------------------------
 
 def test_monster_stealth_check_gm_only(ctx):

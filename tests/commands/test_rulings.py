@@ -477,3 +477,107 @@ def test_roll_dice_refusals_leave_no_rolls(ctx):
         result = registry.execute("roll_dice", ctx, **kwargs)
         assert result.ok is False, kwargs
         assert _last_event_rolls(ctx) == []
+
+
+# -- stabilize / revive / set_defeated ops -----------------------------------
+
+
+def test_ruling_stabilize_op(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="Aldric staunches the bleeding",
+        rationale="Spare the Dying, DM fiat",
+        effects=[{"op": "stabilize", "target": "Kira"}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is True
+    assert res["hp"] == 0
+
+
+def test_ruling_stabilize_op_refuses_conscious_target(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    result = registry.execute(
+        "dm_ruling", ctx, description="Nonsense stabilize", rationale="testing",
+        effects=[{"op": "stabilize", "target": "Kira"}],
+    )
+    assert result.ok is False
+    res = ctx.store.get_resources(kira["id"])
+    assert res["death_saves"]["stable"] is False  # untouched: refused before apply
+
+
+def test_ruling_revive_op_full_transition(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 3, "stable": False, "dead": True},
+    )
+    ctx.store.update_character(kira["id"], status="defeated")
+    ctx.store.update_combat(
+        active=1,
+        combatants=[
+            {"key": "Kira", "name": "Kira", "kind": "character",
+             "character_id": kira["id"], "defeated": True},
+            {"key": "goblin-1", "name": "goblin-1", "kind": "monster"},
+        ],
+    )
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="Aldric pours a healing potion down Kira's throat",
+        rationale="revival ruling",
+        effects=[{"op": "revive", "target": "Kira", "hp": 1}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 1
+    assert "unconscious" not in res["conditions"]
+    assert res["death_saves"] == {
+        "successes": 0, "failures": 0, "stable": False, "dead": False,
+    }
+    assert ctx.store.get_character_by_id(kira["id"])["status"] == "active"
+    combatants = ctx.store.combat()["combatants"]
+    kira_entry = next(c for c in combatants if c["key"] == "Kira")
+    assert kira_entry["defeated"] is False
+
+
+def test_ruling_revive_op_refuses_hardcore_dead_target(ctx, party):
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(
+        kira["id"], hp=0, conditions=["unconscious"],
+        death_saves={"successes": 0, "failures": 3, "stable": False, "dead": True},
+    )
+    ctx.store.update_character(kira["id"], status="dead")
+    ctx.store.conn.commit()
+    result = registry.execute(
+        "dm_ruling", ctx, description="A desperate ritual over Kira's corpse",
+        rationale="testing revival guard",
+        effects=[{"op": "revive", "target": "Kira", "hp": 1}],
+    )
+    assert result.ok is False
+    assert "dead" in result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert res["death_saves"]["dead"] is True
+    assert ctx.store.get_character_by_id(kira["id"])["status"] == "dead"
+
+
+def test_ruling_set_defeated_op(ctx):
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    kira = ctx.store.get_character("Kira")
+    result = registry.execute(
+        "dm_ruling", ctx, description="A trap drops Kira instantly",
+        rationale="environmental hazard, RAW gap",
+        effects=[{"op": "set_defeated", "target": "Kira"}],
+    )
+    assert result.ok, result.refusal
+    res = ctx.store.get_resources(kira["id"])
+    assert res["hp"] == 0
+    assert res["death_saves"]["dead"] is True
+    assert ctx.store.get_character_by_id(kira["id"])["status"] == "defeated"
+    combatants = ctx.store.combat()["combatants"]
+    kira_entry = next(c for c in combatants if c["key"] == "Kira")
+    assert kira_entry["defeated"] is True

@@ -49,10 +49,19 @@ def test_dm_ruling_description_enumerates_effect_ops():
     # surface — every op and its required fields, no source-diving.
     desc = _description(registered_commands()["dm_ruling"], "dm_ruling")
     for op in ("adjust_hp", "set_condition", "clear_condition", "adjust_slot",
-               "set_exhaustion", "adjust_xp", "note"):
+               "set_exhaustion", "adjust_xp", "note",
+               "stabilize", "revive", "set_defeated"):  # TVA-54
         assert op in desc
     assert "slot_level" in desc  # per-op required fields, not just op names
     assert "rationale" in desc
+
+
+def test_stabilize_is_a_registered_command():
+    # TVA-54: stabilize surfaces in tool introspection just like death_save.
+    schema = input_schema(registered_commands()["stabilize"])
+    assert schema["properties"]["character"] == {"type": "string"}
+    assert schema["properties"]["medicine_by"] == {"type": "string"}
+    assert schema["required"] == ["character"]
 
 
 def test_open_campaign_is_a_registered_command_with_slug_schema():

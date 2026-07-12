@@ -106,7 +106,7 @@ def test_ruling_adjust_slot_and_adjust_xp(ctx):
     assert result.ok
     res = ctx.store.get_resources(aldric["id"])
     assert res["spell_slots"]["1"]["remaining"] == 3
-    assert ctx.store.get_character("Brother Aldric")["xp"] == 950
+    assert ctx.store.get_character("Brother Aldric")["xp"] == 50
 
 
 def test_ruling_rejects_unknown_op(ctx):

@@ -29,12 +29,13 @@ def _last_event(ctx) -> dict:
 
 
 def _spell_party(tmp_path, rules_path):
-    """Bootstrap a campaign with Kira (fighter PC) and a level-3 cleric.
+    """Bootstrap a campaign with Kira (fighter PC) and a level-3 cleric
+    (2nd-level slots for hold-person), mirroring the unit fixtures.
 
-    The level-3 cleric is set up with direct store writes (level/HP/slots),
-    the same approach as the root conftest ``party`` fixture: this is test
-    scaffolding, not gameplay, so it bypasses the XP-splitting award_xp path
-    (which would also level Kira) to land the exact 4/2 slot layout.
+    burning-hands is wizard/sorcerer-only in the SRD, so create_character's
+    class-castability check would refuse it in spells_known; it's added via
+    a direct store write afterward, same as the root conftest ``party``
+    fixture, purely to exercise the AoE/save-halves resolver path.
     """
     ctx = bootstrap_campaign(
         tmp_path / "campaigns", rules_path, slug="spells", name="Spells",
@@ -43,17 +44,15 @@ def _spell_party(tmp_path, rules_path):
     assert registry.execute("create_character", ctx, **KIRA_KWARGS).ok
     assert registry.execute(
         "create_character", ctx, name="Brother Aldric", role="companion",
-        class_slug="cleric", race_slug="hill-dwarf",
+        class_slug="cleric", race_slug="hill-dwarf", level=3,
         abilities={"str": 12, "dex": 13, "con": 14, "int": 10, "wis": 15, "cha": 8},
         ac=18, proficiencies={"skills": ["medicine"]},
         attacks=[{"weapon": "mace", "name": "mace"}],
-        spells_known=["cure-wounds", "burning-hands", "hold-person"],
+        spells_known=["cure-wounds", "hold-person"],
     ).ok
     aldric = ctx.store.get_character("Brother Aldric")
-    ctx.store.update_character(aldric["id"], level=3, xp=900, max_hp=24)
-    ctx.store.update_resources(
-        aldric["id"], hp=24, hit_dice_remaining=3,
-        spell_slots={"1": {"max": 4, "remaining": 4}, "2": {"max": 2, "remaining": 2}},
+    ctx.store.update_character(
+        aldric["id"], spells_known=aldric["spells_known"] + ["burning-hands"]
     )
     ctx.store.conn.commit()
     return ctx

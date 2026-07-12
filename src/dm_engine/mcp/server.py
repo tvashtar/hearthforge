@@ -182,14 +182,17 @@ def build_server(campaigns_dir: Path, rules_db_path: Path) -> Server:
         if name == "create_campaign":
             ctx = bootstrap_campaign(campaigns_dir, rules_db_path, **arguments)
             activate(ctx)
+            # bootstrap logged the create_campaign event itself, with the full
+            # digest (start day/time) and clock; echo its id and digest so the
+            # envelope matches what was recorded rather than a rebuilt summary
+            # (TVA-26, TVA-48).
+            logged = ctx.store.events_tail(1)[0]
             result = CommandResult(
                 ok=True,
                 command="create_campaign",
-                digest=f"Campaign {arguments['name']} created",
-                data={"slug": arguments["slug"]},
-                # bootstrap logged the create_campaign event itself; echo its
-                # id so the envelope's event_ids is real (TVA-26).
-                event_ids=[e["id"] for e in ctx.store.events_tail(1)],
+                digest=logged["digest"],
+                data={"slug": arguments["slug"], "clock": ctx.store.world_clock()},
+                event_ids=[logged["id"]],
             )
             return _text(result)
 

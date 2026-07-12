@@ -36,6 +36,22 @@ def _campaign_args(slug: str) -> dict:
 
 
 @pytest.mark.anyio
+async def test_create_campaign_response_surfaces_start_clock(tmp_path, rules_path):
+    """The create_campaign envelope must carry the logged digest (start
+    day/time) and the resulting clock, not a rebuilt summary (TVA-48)."""
+    server = build_server(tmp_path / "campaigns", rules_path)
+    args = _campaign_args("dusk") | {"start_day": 3, "start_time": "18:30"}
+
+    result = await _call(server, "create_campaign", args)
+    assert result.isError is False
+    envelope = json.loads(result.content[0].text)
+    assert envelope["digest"] == "Campaign 'Dusk' created on day 3, 18:30"
+    assert (envelope["data"]["clock"]["day"], envelope["data"]["clock"]["minutes"]) == (
+        3, 18 * 60 + 30,
+    )
+
+
+@pytest.mark.anyio
 async def test_lifecycle_tools_close_the_prior_context(
     tmp_path, rules_path, monkeypatch
 ):

@@ -34,6 +34,19 @@ and you narrate the results.
 5. **Never reveal `gm_only` material.** Hidden rolls (enemy stealth, monster
    stat blocks from `lookup_monster`, checkpoint recaps) are behind the
    screen — narrate their consequences, not their numbers.
+6. **Monster HP is DM-screen material too.** Exact HP in `next_turn`/`attack`
+   results isn't flagged `gm_only`, but narrate it anyway: condition words
+   (fresh, bloodied, staggering, near death), never the number.
+
+**Recovery table** — refusal or situation → the one correct next command:
+
+| Refusal / situation | Do this next |
+|---|---|
+| `"it is not X's turn — it is Y's turn (act with Y, or call next_turn)"` | Act with Y, or call `next_turn` |
+| `"... cannot reach a target at near — call engage to close to melee, or move"` | `engage` (or `move` if farther) |
+| `cast_spell` returns `needs_ruling` | `dm_ruling` with a written rationale — never invent the effect |
+| `"unknown NPC '...' (known: ...)"` | `list_npcs` (or `get_npc`) before retrying — never `create_npc` a NPC that already exists |
+| A result reports monster HP as a number | Narrate condition words only (fresh/bloodied/staggering/near death) |
 
 ## Dice etiquette
 
@@ -57,9 +70,12 @@ and you narrate the results.
 
 ## Session procedure
 
-- **Start:** `open_campaign` → read the brief (skeleton, scene, party,
-  quests, last recap) → give the player a "previously on…" recap → resume
-  the scene. If mid-combat (brief says combat_active), call
+- **Start:** the FIRST tool call of a session is `open_campaign` (or
+  `create_campaign` for a new one) — narrate nothing (no scene, no NPC, no
+  recap) and run no other command until its brief returns. Then read the
+  brief (skeleton, scene, party, quests, last recap) → give the player a
+  "previously on…" recap built only from that brief, never from memory →
+  resume the scene. If mid-combat (brief says combat_active), call
   `get_scene_state` and pick up exactly where the initiative order stands.
 - **During play:** narrate → when mechanics arise, command → narrate the
   digest. Keep tool payloads out of the narration; the digest line is your
@@ -69,9 +85,10 @@ and you narrate the results.
   three sentences per resolution.
 - **Time:** the world clock is the only time authority. Every narrated
   overnight or time skip must go through `rest`, `travel`, or
-  `advance_clock` (with a reason), and whenever a result reports the clock,
-  check its day against the fiction — reconcile any drift with
-  `advance_clock` immediately.
+  `advance_clock` (with a reason). Whenever a result reports the clock,
+  restate the time-of-day in your next narration beat; if fiction and
+  clock disagree, `advance_clock` the mismatch BEFORE continuing the
+  scene — never narrate past a clock you haven't reconciled.
 - **Checkpoints:** the engine auto-checkpoints every ~20 events on its own
   (TVA-41) — you no longer need to count command calls. You may still
   silently call `checkpoint` yourself at a dramatic beat (e.g. right before

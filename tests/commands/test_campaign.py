@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from dm_engine.commands import registry
@@ -23,6 +25,33 @@ def test_bootstrap_creates_store_and_logs_event(tmp_path, rules_path):
         assert row["command"] == "create_campaign"
     finally:
         ctx.store.close()
+
+
+def test_bootstrap_sets_explicit_start_day_and_time(tmp_path, rules_path):
+    ctx = bootstrap_campaign(
+        tmp_path / "campaigns", rules_path, slug="evening", name="Evening",
+        skeleton={"premise": "test"}, start_day=3, start_time="18:30",
+    )
+    try:
+        clock = ctx.store.world_clock()
+        assert (clock["day"], clock["minutes"]) == (3, 18 * 60 + 30)
+        row = ctx.store.conn.execute(
+            "SELECT inputs FROM event_log WHERE command = 'create_campaign'"
+        ).fetchone()
+        assert json.loads(row["inputs"])["start_time"] == "18:30"
+    finally:
+        ctx.store.close()
+
+
+@pytest.mark.parametrize(
+    "start_day,start_time", [(0, "18:00"), (1, "noon"), (1, "8:00"), (1, "24:00")]
+)
+def test_bootstrap_rejects_invalid_start_clock(tmp_path, rules_path, start_day, start_time):
+    with pytest.raises(ValueError):
+        bootstrap_campaign(
+            tmp_path / "campaigns", rules_path, slug="invalid", name="Invalid",
+            skeleton={"premise": "test"}, start_day=start_day, start_time=start_time,
+        )
 
 
 def test_brief_reflects_state_and_recap(ctx):

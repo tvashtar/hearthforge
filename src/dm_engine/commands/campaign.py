@@ -22,6 +22,8 @@ def bootstrap_campaign(
     skeleton: dict,
     starting_region: dict | None = None,
     seed: int | None = None,
+    start_day: int = 1,
+    start_time: str = "08:00",
 ) -> CommandContext:
     """Create a brand-new campaign store and return a ready CommandContext.
 
@@ -29,6 +31,19 @@ def bootstrap_campaign(
     creates the store directly, seeds any starting locations/NPCs, and
     appends a synthetic `create_campaign` event row itself.
     """
+    if start_day < 1:
+        raise ValueError("start_day must be at least 1")
+    if not isinstance(start_time, str) or len(start_time) != 5 or start_time[2] != ":":
+        raise ValueError("start_time must use HH:MM format")
+    try:
+        hour_text, minute_text = start_time.split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+    except ValueError as exc:
+        raise ValueError("start_time must use HH:MM format") from exc
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError("start_time must be a valid 24-hour HH:MM time")
+    start_minutes = hour * 60 + minute
+
     if seed is None:
         seed = random.SystemRandom().randrange(2**31)
 
@@ -41,6 +56,7 @@ def bootstrap_campaign(
         skeleton=skeleton,
     )
     with store.transaction():
+        store.update_world_clock(day=start_day, minutes=start_minutes)
         if starting_region:
             for loc in starting_region.get("locations", []):
                 store.upsert_location(
@@ -60,12 +76,14 @@ def bootstrap_campaign(
             "skeleton": skeleton,
             "starting_region": starting_region,
             "seed": seed,
+            "start_day": start_day,
+            "start_time": start_time,
         }
         result = CommandResult(
             ok=True,
             command="create_campaign",
-            digest=f"Campaign '{name}' created",
-            data={"slug": slug},
+            digest=f"Campaign '{name}' created on day {start_day}, {start_time}",
+            data={"slug": slug, "clock": store.world_clock()},
         )
         store.append_event(
             command="create_campaign", inputs=inputs, result=result.model_dump(), rolls=[]

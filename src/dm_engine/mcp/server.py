@@ -129,6 +129,8 @@ _CREATE_CAMPAIGN_SCHEMA = {
         "skeleton": {"type": "object"},
         "starting_region": {"type": "object"},
         "seed": {"type": "integer"},
+        "start_day": {"type": "integer", "minimum": 1},
+        "start_time": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
     },
     "required": ["slug", "name", "skeleton"],
 }

@@ -28,6 +28,7 @@ def test_build_campaign_creates_identical_starting_state(tmp_path, rules_path):
     assert {"Kira", "Brother Aldric"} <= chars
     quests = db.execute("SELECT COUNT(*) FROM quests").fetchone()[0]
     assert quests >= 1
+    assert db.execute("SELECT day, minutes FROM world_clock").fetchone() == (1, 18 * 60)
     level, spells_known = db.execute(
         "SELECT level, spells_known FROM characters WHERE name = 'Brother Aldric'"
     ).fetchone()

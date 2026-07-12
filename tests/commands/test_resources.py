@@ -18,6 +18,23 @@ def test_long_rest_restores_everything_and_advances_clock(ctx):
     assert res["hp"] == kira["max_hp"] and res["exhaustion"] == 1
     after = ctx.store.world_clock()
     assert (after["day"], after["minutes"]) != (before["day"], before["minutes"])
+    assert "day 1, 16:00" in result.digest
+
+
+def test_long_rest_can_sleep_until_dawn(ctx):
+    ctx.store.update_world_clock(day=1, minutes=18 * 60)
+    result = registry.execute("rest", ctx, kind="long", wake_time="06:00")
+    assert result.ok
+    assert (result.data["clock"]["day"], result.data["clock"]["minutes"]) == (2, 360)
+    assert result.data["elapsed_minutes"] == 720
+    assert "day 2, 06:00" in result.digest
+
+
+def test_long_rest_refuses_wake_time_before_eight_hours(ctx):
+    ctx.store.update_world_clock(day=1, minutes=23 * 60)
+    result = registry.execute("rest", ctx, kind="long", wake_time="06:00")
+    assert result.ok is False
+    assert "at least 480 minutes" in result.refusal
 
 
 def test_short_rest_spends_hit_dice_with_player_values(ctx):

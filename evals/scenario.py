@@ -31,6 +31,8 @@ class Scenario:
     starting_region: dict
     quest: dict
     scene: dict
+    start_day: int = 1
+    start_time: str = "08:00"
     beats: list[Beat] = field(default_factory=list)
 
 
@@ -60,6 +62,8 @@ def build_campaign(
         skeleton={"premise": scenario.premise},
         starting_region=scenario.starting_region,
         seed=seed,
+        start_day=scenario.start_day,
+        start_time=scenario.start_time,
     )
     try:
         for member in scenario.party:

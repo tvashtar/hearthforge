@@ -32,6 +32,7 @@ def rest(
     kind: str,
     hit_dice: dict[str, int] | None = None,
     player_hit_die_values: list[int] | None = None,
+    wake_time: str | None = None,
     **kwargs,
 ) -> CommandResult:
     if kind not in _KINDS:
@@ -39,8 +40,10 @@ def rest(
     if ctx.store.combat()["active"]:
         return refuse("rest", "cannot rest while combat is active")
     if kind == "short":
+        if wake_time is not None:
+            return refuse("rest", "wake_time is only valid for a long rest")
         return _short_rest(ctx, hit_dice or {}, player_hit_die_values)
-    return _long_rest(ctx)
+    return _long_rest(ctx, wake_time)
 
 
 def _short_rest(
@@ -101,7 +104,28 @@ def _short_rest(
     )
 
 
-def _long_rest(ctx: CommandContext) -> CommandResult:
+def _long_rest(ctx: CommandContext, wake_time: str | None = None) -> CommandResult:
+    rest_minutes = _LONG_REST_MINUTES
+    if wake_time is not None:
+        if not isinstance(wake_time, str) or len(wake_time) != 5 or wake_time[2] != ":":
+            return refuse("rest", "wake_time must use HH:MM format")
+        try:
+            hour_text, minute_text = wake_time.split(":", 1)
+            hour, minute = int(hour_text), int(minute_text)
+        except ValueError:
+            return refuse("rest", "wake_time must use HH:MM format")
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            return refuse("rest", "wake_time must be a valid 24-hour HH:MM time")
+        clock = ctx.store.world_clock()
+        target = hour * 60 + minute
+        rest_minutes = (target - clock["minutes"]) % 1440
+        if rest_minutes < _LONG_REST_MINUTES:
+            return refuse(
+                "rest",
+                f"waking at {wake_time} would allow only {rest_minutes} minutes; "
+                "a long rest requires at least 480 minutes",
+            )
+
     per_character: list[dict] = []
     rested_ids: list[int] = []
     for char in ctx.store.party():
@@ -143,15 +167,17 @@ def _long_rest(ctx: CommandContext) -> CommandResult:
         expired += clear_concentration_effects(ctx, cid)
 
     clock = ctx.store.world_clock()
-    day_overflow, minutes = divmod(clock["minutes"] + _LONG_REST_MINUTES, 1440)
+    day_overflow, minutes = divmod(clock["minutes"] + rest_minutes, 1440)
     new_day = clock["day"] + day_overflow
     ctx.store.update_world_clock(day=new_day, minutes=minutes)
     expired += expire_clock_effects(ctx)
 
-    digest = f"Long rest — the party wakes on day {new_day} fully restored"
+    digest = (f"Long rest ({rest_minutes} minutes) — the party wakes on day "
+              f"{new_day}, {minutes // 60:02d}:{minutes % 60:02d} fully restored")
     return CommandResult(
         ok=True, command="rest", digest=digest,
         data={"kind": "long", "per_character": per_character, "day": new_day,
+              "clock": ctx.store.world_clock(), "elapsed_minutes": rest_minutes,
               "effects_expired": [e["name"] for e in expired]},
     )
 

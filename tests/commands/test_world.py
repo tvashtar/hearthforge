@@ -9,6 +9,8 @@ def test_travel_advances_clock_and_moves_party(ctx):
     clock = ctx.store.world_clock()
     assert clock["location_slug"] == "mill"
     assert clock["day"] == 2 and clock["minutes"] == 480 + 30 * 60 - 1440
+    assert "day 2, 14:00" in result.digest
+    assert "1800 minutes" in result.digest
 
 
 def test_travel_to_unknown_location_refused(ctx):
@@ -190,6 +192,7 @@ def test_advance_clock_by_days_and_minutes(ctx):
     assert clock["day"] == 2 and clock["minutes"] == 480 + 90
     assert result.data["clock"]["day"] == 2
     assert "day 2" in result.digest
+    assert "1530 minutes" in result.digest
     assert "narrated overnight at the inn" in result.digest
 
 

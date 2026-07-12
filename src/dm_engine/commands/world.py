@@ -43,8 +43,11 @@ def travel(
     )
     expired = expire_clock_effects(ctx)
     new_clock = ctx.store.world_clock()
+    elapsed = days * 1440 + hours * 60
     return CommandResult(
-        ok=True, command="travel", digest=f"Traveled to {destination_slug}",
+        ok=True, command="travel",
+        digest=(f"Traveled to {destination_slug} in {elapsed} minutes — "
+                f"day {new_day}, {minutes // 60:02d}:{minutes % 60:02d}"),
         data={"clock": new_clock, "effects_expired": [e["name"] for e in expired]},
     )
 
@@ -81,9 +84,10 @@ def advance_clock(
     ctx.store.update_world_clock(day=new_day, minutes=new_minutes)
     new_clock = ctx.store.world_clock()
     why = f" — {reason}" if reason else ""
+    elapsed = days * 1440 + minutes
     return CommandResult(
         ok=True, command="advance_clock",
-        digest=(f"Clock advanced to day {new_day},"
+        digest=(f"Clock advanced {elapsed} minutes to day {new_day},"
                 f" {new_minutes // 60:02d}:{new_minutes % 60:02d}{why}"),
         data={"clock": new_clock, "advanced": {"days": days, "minutes": minutes},
               "reason": reason},

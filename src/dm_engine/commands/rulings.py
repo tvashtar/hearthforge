@@ -20,6 +20,7 @@ from typing import Any
 
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
+    defeated_status,
     find_combatant,
     set_combatant_defeated,
     unknown_combatant_refusal,
@@ -259,7 +260,7 @@ def _validate_op(ctx: CommandContext, op: Any) -> str | None:
             return f"{target} is a monster; stabilize targets characters only"
         res = ctx.store.get_resources(char["id"])
         ds = res["death_saves"]
-        if res["hp"] > 0 or ds["stable"] or ds["dead"]:
+        if res["hp"] > 0 or ds["stable"] or ds["dead"] or char["status"] != "active":
             return f"{target} is not dying (0 hp, not yet stable or dead)"
         return None
 
@@ -476,8 +477,7 @@ def _apply_op(ctx: CommandContext, op: dict) -> dict:
 
     if kind == "set_defeated":
         _, char, _ = _resolve_target(ctx, op["target"])
-        death_mode = ctx.store.campaign_meta()["death_mode"]
-        status = "dead" if death_mode == "hardcore" else "defeated"
+        status = defeated_status(ctx)
         ctx.store.update_resources(
             char["id"], hp=0, death_saves=DeathSaveState(dead=True).model_dump()
         )

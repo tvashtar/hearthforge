@@ -1,6 +1,7 @@
 import pytest
 
 from dm_engine.commands import registry
+from tests.conftest import kill_kira_via_death_saves
 
 pytestmark = pytest.mark.usefixtures("party")
 
@@ -120,11 +121,7 @@ def test_use_item_heal_refused_for_hardcore_dead_user(ctx_hardcore, party_hardco
     registry.execute("add_item", ctx, character="Kira", item="healing potion")
     # Kill Kira through the real dying path: 0 hp + three failed death saves
     # (hardcore death_mode maps the kill to status 'dead').
-    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
-    ctx.store.conn.commit()
-    for _ in range(3):
-        assert registry.execute("death_save", ctx, character="Kira",
-                                player_value=2).ok
+    kill_kira_via_death_saves(ctx)
     assert ctx.store.get_character("Kira")["status"] == "dead"
 
     result = registry.execute("use_item", ctx, character="Kira",

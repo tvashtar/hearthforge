@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
+    defeated_status,
     find_combatant,
     set_combatant_defeated,
 )
@@ -443,8 +444,7 @@ def death_save(
         conditions = [c for c in resources["conditions"] if c != "unconscious"]
         ctx.store.update_resources(char["id"], hp=1, conditions=conditions)
     elif outcome.state.dead:
-        death_mode = ctx.store.campaign_meta()["death_mode"]
-        new_status = "dead" if death_mode == "hardcore" else "defeated"
+        new_status = defeated_status(ctx)
         ctx.store.update_character(char["id"], status=new_status)
         _mark_combatant_defeated(ctx, character)
         status_note = f" — {character} is {new_status}"

@@ -22,6 +22,7 @@ from pydantic import ValidationError
 
 from dm_engine.commands.combatants import (
     ambiguous_combatant_refusal,
+    defeated_status,
     find_combatant,
     turn_order_refusal,
     unknown_combatant_refusal,
@@ -312,16 +313,14 @@ def apply_damage_to_target(
         died = outcome.state.dead
         frag["target"]["hp"] = 0
         if died:
-            death_mode = ctx.store.campaign_meta()["death_mode"]
-            status = "dead" if death_mode == "hardcore" else "defeated"
+            status = defeated_status(ctx)
             ctx.store.update_character(cid, status=status)
             frag["target"]["status"] = status
         else:
             frag["target"]["status"] = "dying"
     elif amount >= hp_before and (amount - hp_before) >= max_hp:
         # Massive overflow: instant death.
-        death_mode = ctx.store.campaign_meta()["death_mode"]
-        status = "dead" if death_mode == "hardcore" else "defeated"
+        status = defeated_status(ctx)
         ctx.store.update_resources(
             cid, hp=0, death_saves=DeathSaveState(dead=True).model_dump()
         )

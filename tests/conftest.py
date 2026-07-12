@@ -84,6 +84,20 @@ def party_hardcore(ctx_hardcore):
     return ctx_hardcore
 
 
+def kill_kira_via_death_saves(ctx):
+    """Drive Kira through the real dying path to a kill: 0 hp, unconscious,
+    three failed death saves (checks.py's death_save sets `characters.status`
+    per death_mode and, when combat is active, marks the combatant tracker's
+    `defeated` flag via `_mark_combatant_defeated` — TVA-51's landed contract).
+    """
+    kira = ctx.store.get_character("Kira")
+    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
+    ctx.store.conn.commit()
+    for _ in range(3):
+        result = registry.execute("death_save", ctx, character="Kira", player_value=2)
+        assert result.ok, result.refusal
+
+
 @pytest.fixture()
 def party(ctx):
     """Kira (PC fighter) + Brother Aldric (companion cleric), for command

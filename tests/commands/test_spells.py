@@ -2,6 +2,7 @@ import pytest
 
 from dm_engine.commands import registry
 from dm_engine.commands.spells import _heal_notation
+from tests.conftest import kill_kira_via_death_saves
 
 pytestmark = pytest.mark.usefixtures("party")  # Aldric knows cure-wounds, bless, guiding-bolt, sacred-flame, burning-hands (add burning-hands + hold-person to his spells_known in the fixture for these tests)
 
@@ -497,25 +498,11 @@ def test_not_known_refusal_lists_known_spells_when_some_are_known(ctx):
     )
 
 
-def _kill_kira_via_death_saves(ctx):
-    """Drive Kira through the real dying path to a kill: 0 hp, unconscious,
-    three failed death saves (checks.py's death_save sets `characters.status`
-    per death_mode and, when combat is active, marks the combatant tracker's
-    `defeated` flag via `_mark_combatant_defeated` — TVA-51's landed contract).
-    """
-    kira = ctx.store.get_character("Kira")
-    ctx.store.update_resources(kira["id"], hp=0, conditions=["unconscious"])
-    ctx.store.conn.commit()
-    for _ in range(3):
-        result = registry.execute("death_save", ctx, character="Kira", player_value=2)
-        assert result.ok, result.refusal
-
-
 def test_healing_revived_pc_rejoins_combat(ctx, party):
     registry.execute("start_combat", ctx,
                      monsters=[{"slug": "goblin", "count": 1, "band": "near"}],
                      pc_initiative=15)
-    _kill_kira_via_death_saves(ctx)
+    kill_kira_via_death_saves(ctx)
     kira = ctx.store.get_character("Kira")
     assert kira["status"] == "defeated"  # narrative mode
     kira_c = next(c for c in ctx.store.combat()["combatants"] if c["key"] == "Kira")
@@ -538,7 +525,7 @@ def test_healing_revived_pc_rejoins_combat(ctx, party):
 
 def test_healing_hardcore_dead_pc_is_refused(ctx_hardcore, party_hardcore):
     ctx = ctx_hardcore
-    _kill_kira_via_death_saves(ctx)
+    kill_kira_via_death_saves(ctx)
     assert ctx.store.get_character("Kira")["status"] == "dead"  # hardcore mode
 
     aldric = ctx.store.get_character("Brother Aldric")

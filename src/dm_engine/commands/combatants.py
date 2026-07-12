@@ -21,6 +21,13 @@ place that resolves an identifier against a list of live combatants:
 from __future__ import annotations
 
 
+def defeated_status(ctx) -> str:
+    """The character-status a death resolves to: "dead" in a hardcore
+    campaign (permanent), "defeated" otherwise (revivable by ruling)."""
+    death_mode = ctx.store.campaign_meta()["death_mode"]
+    return "dead" if death_mode == "hardcore" else "defeated"
+
+
 def set_combatant_defeated(ctx, character: str, defeated: bool) -> None:
     """Set the active-combat tracker's defeated flag for a character
     combatant (no-op out of combat or for unknown keys)."""

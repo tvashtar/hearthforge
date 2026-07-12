@@ -113,6 +113,21 @@ def _hit_rider(desc: str) -> dict:
     return rider
 
 
+def _rider_if_present(desc: str, *, has_damage: bool) -> dict | None:
+    """Structured rider payload for an attack action. Damage-less attacks
+    always surface their rider (TVA-22). Damaging attacks surface one only
+    when the Hit text carries mechanics beyond the damage roll — a DC or a
+    condition name — so plain weapon attacks stay rider-free (TVA-57). Full
+    auto-resolution of rider damage dice remains DM-adjudicated via
+    roll_dice + dm_ruling."""
+    rider = _hit_rider(desc)
+    if not has_damage:
+        return rider
+    if rider.get("escape_dc") or rider["conditions"] or "DC" in rider["text"]:
+        return rider
+    return None
+
+
 def _attacker_attack_names(ctx: CommandContext, atk: dict) -> list[str]:
     """The names a combatant could pass as `attack_name`, in storage order.
 
@@ -173,6 +188,18 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
         (a for a in actions if (a.get("name") or "").lower() == name_norm), None
     )
     if action is None or "attack_bonus" not in action:
+        # A named stat-block action that just isn't a weapon attack (no
+        # attack_bonus) — e.g. the giant toad's Swallow — gets an actionable
+        # pointer instead of "has no attack named" (TVA-57).
+        if action is not None:
+            first_sentence = re.split(
+                r"(?<=[.!?])\s+", action.get("desc", "").strip(), maxsplit=1
+            )[0]
+            return (
+                f"{action['name']!r} is not a weapon attack — it is a stat-block "
+                f'action: "{first_sentence}" Resolve it via roll_dice + dm_ruling '
+                "(or apply_condition for its conditions)."
+            )
         names = ", ".join(a["name"] for a in actions if "attack_bonus" in a) or "none"
         return f"{atk['name']} has no attack named {attack_name!r} (available: {names})"
     dmg = next(
@@ -203,7 +230,7 @@ def _resolve_attack_spec(ctx: CommandContext, atk: dict, attack_name: str) -> di
         "range_ft": range_ft,
         "long_range_ft": long_range_ft,
         "magical": _monster_weapons_are_magical(record),
-        "on_hit": None if dmg else _hit_rider(desc),
+        "on_hit": _rider_if_present(desc, has_damage=dmg is not None),
         "is_pc": False,
     }
 
@@ -423,6 +450,10 @@ def _resolve_swing(
     data["damage"] = {
         "raw": raw, "final": final, "type": damage_type, "applied": mitigated.applied,
     }
+    # A damaging attack can also carry a rider (grapple, condition, save DC);
+    # surface it alongside the damage for the DM to apply (TVA-57).
+    if spec["on_hit"]:
+        data["on_hit"] = spec["on_hit"]
     data["target"] = fragment["target"]
     if "concentration_check" in fragment:
         data["concentration_check"] = fragment["concentration_check"]
@@ -474,9 +505,10 @@ def _swing_digest(attacker: str, target: str, swing: dict) -> str:
             f"({ar['total']} vs AC {ar['target_ac']}) — {effect}"
         )
     dmg = swing["damage"]
+    rider_tail = " (rider: needs ruling)" if swing.get("on_hit") else ""
     return (
         f"{attacker} {verb} {target} for {dmg['final']} {dmg['type']} "
-        f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}"
+        f"({ar['total']} vs AC {ar['target_ac']}){_drop_tail(target, swing)}{rider_tail}"
     )
 
 

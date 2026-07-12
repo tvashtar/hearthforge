@@ -761,6 +761,80 @@ def test_single_attack_shape_unchanged(ctx, combat):
     assert "swings" not in result.data
 
 
+# --- riders on damaging attacks + non-attack actions (TVA-57) ------------
+
+
+def _duel_vs_kira(ctx, slug, *, target_ac=1, target_hp=100):
+    """Start combat with `slug` engaged in melee with Kira, its turn; Kira's
+    AC/HP forced so a monster swing lands (only a nat 1 misses) without
+    dropping her, so the swing data can be inspected."""
+    registry.execute("start_combat", ctx,
+                     monsters=[{"slug": slug, "count": 1, "band": "near"}],
+                     pc_initiative=15)
+    kira = ctx.store.get_character("Kira")
+    ctx.store.conn.execute("UPDATE resources SET hp = ? WHERE character_id = ?",
+                           (target_hp, kira["id"]))
+    ctx.store.conn.execute("UPDATE characters SET ac = ? WHERE id = ?",
+                           (target_ac, kira["id"]))
+    ctx.store.conn.commit()
+    _engage_pair(ctx, f"{slug}-1", "Kira")
+    _force_turn(ctx, f"{slug}-1", band="engaged", engaged_with=["Kira"])
+
+
+def _land_hit(ctx, attacker, attack_name):
+    """Roll `attack` until a seeded hit lands (spend='none'); return it."""
+    for _ in range(12):
+        result = registry.execute("attack", ctx, attacker=attacker,
+                                  target="Kira", attack_name=attack_name, spend="none")
+        assert result.ok, result.refusal
+        if result.data["hit"]:
+            return result
+    pytest.fail("no hit landed in 12 seeded attempts")  # pragma: no cover
+
+
+def test_damaging_attack_with_rider_surfaces_on_hit(ctx):
+    """The giant toad's bite deals damage AND grapples: a hit populates
+    data["damage"] and ALSO surfaces the structured grapple rider so the DM
+    can apply it (TVA-57)."""
+    _duel_vs_kira(ctx, "giant-toad")
+    hit = _land_hit(ctx, "giant-toad-1", "Bite")
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "piercing"
+    assert hit.data["damage"]["final"] >= 1
+    rider = hit.data["on_hit"]
+    assert rider is not None
+    assert rider["escape_dc"] == 13
+    assert "grappled" in rider["conditions"]
+    assert "grappled" in rider["text"]
+    # digest flags that a ruling is still owed
+    assert "rider" in hit.digest.lower()
+
+
+def test_plain_damage_attack_has_no_on_hit(ctx):
+    """A bandit's scimitar is pure weapon damage: no rider must be invented
+    on the swing (TVA-57 — plain weapon attacks stay rider-free)."""
+    _duel_vs_kira(ctx, "bandit")
+    hit = _land_hit(ctx, "bandit-1", "Scimitar")
+    assert hit.data["damage"] is not None
+    assert hit.data["damage"]["type"] == "slashing"
+    assert hit.data.get("on_hit") is None
+
+
+def test_non_attack_action_refusal_names_the_action(ctx):
+    """Swallow is a stat-block action, not a weapon attack. Naming it must
+    return an actionable refusal that names the action, says it isn't a weapon
+    attack, quotes its first sentence, and points at roll_dice + dm_ruling."""
+    _duel_vs_kira(ctx, "giant-toad")
+    result = registry.execute("attack", ctx, attacker="giant-toad-1",
+                              target="Kira", attack_name="Swallow", spend="none")
+    assert result.ok is False
+    assert "Swallow" in result.refusal
+    assert "not a weapon attack" in result.refusal
+    assert "makes one bite attack" in result.refusal  # first sentence of desc
+    assert "roll_dice" in result.refusal
+    assert "dm_ruling" in result.refusal
+
+
 # --- condition commands -------------------------------------------------
 
 

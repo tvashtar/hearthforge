@@ -229,10 +229,13 @@ def start_combat(
         for c in dumps
     ]
     monster_count = sum(1 for c in dumps if c["kind"] == "monster")
-    inits = ", ".join(f"{c['key']} {c['initiative']}" for c in dumps)
+    # TVA-44: initiative is public at a real table — read this aloud with
+    # display names, not internal keys.
+    order_line = " → ".join(f"{c['name']} ({c['initiative']})" for c in dumps)
     digest = (
-        f"Combat! {monster_count} enemies face the party — initiative: {inits} "
-        f"({assessment.difficulty}, {assessment.adjusted_xp} adj. XP)"
+        f"Combat! {monster_count} enemies face the party "
+        f"({assessment.difficulty}, {assessment.adjusted_xp} adj. XP). "
+        f"Initiative: {order_line}"
     )
     return CommandResult(
         ok=True, command="start_combat", digest=digest,
@@ -247,11 +250,22 @@ def start_combat(
     )
 
 
+def _live_hp_and_conditions(ctx: CommandContext, c: dict) -> tuple[int | None, list[str]]:
+    """Live HP/conditions for one combatant, merged from the character
+    tables (source of truth) for PCs/companions; monsters carry theirs
+    inline in the combatant dict already."""
+    if c["kind"] == "character":
+        res = ctx.store.get_resources(c["character_id"])
+        return res["hp"], res["conditions"]
+    return c["hp"], c["conditions"]
+
+
 def _combat_snapshot(ctx: CommandContext, combat: dict) -> dict:
-    """Compact live-combat snapshot shared by `next_turn` and
-    `get_scene_state`: the initiative order with characters' HP/max
-    HP/conditions merged live from their tables, plus every combatant's
-    budget keyed by combatant."""
+    """Full live-combat snapshot for `get_scene_state`'s out-of-combat/
+    re-orientation use: the initiative order with characters' HP/
+    conditions merged live from their tables, plus every combatant's
+    budget keyed by combatant — rich enough to rebuild scene state after a
+    resume with nothing re-derived (see test_e2e_resume_rehydration)."""
     order = []
     budgets = {}
     for c in combat["combatants"]:
@@ -269,6 +283,43 @@ def _combat_snapshot(ctx: CommandContext, combat: dict) -> dict:
         "active": combat["combatants"][combat["turn_index"]]["key"],
         "order": order,
         "budgets": budgets,
+    }
+
+
+# TVA-40: next_turn is the most-called combat tool (14-26x/session) and used
+# to re-send the full snapshot above every turn — budgets three ways (each
+# order[] row, a budgets{} map, and a top-level dup of the active budget) and
+# static per-combatant fields that never change turn-to-turn (dex_modifier,
+# xp, monster_slug, character_id, ac, surprised, reaction_used). None of that
+# is needed to narrate or address the next command: a DM needs the roster's
+# identity/kind/initiative, live hp (to call bloodied/near-death), max_hp
+# (the denominator for "bloodied" — kept for that judgment only), position
+# (band/engaged_with), conditions, defeated, and the acting combatant's
+# budget. `get_scene_state` keeps the full shape above since it exists
+# specifically for full re-orientation/rehydration, not the per-turn path.
+_TURN_ROW_FIELDS = (
+    "key", "name", "kind", "initiative", "hp", "max_hp",
+    "band", "engaged_with", "conditions", "defeated",
+)
+
+
+def _turn_snapshot(ctx: CommandContext, combat: dict, active_idx: int) -> dict:
+    """Slim per-turn snapshot for `next_turn`: pruned order rows, and a
+    budget only on the acting combatant's row (no duplicate top-level
+    budget, no budgets{} map for every other combatant's static budget)."""
+    order = []
+    for i, c in enumerate(combat["combatants"]):
+        hp, conditions = _live_hp_and_conditions(ctx, c)
+        row = {**{f: c[f] for f in _TURN_ROW_FIELDS if f not in ("hp", "conditions")},
+               "hp": hp, "conditions": conditions}
+        if i == active_idx:
+            row["budget"] = c["budget"]
+        order.append(row)
+    return {
+        "round": combat["round"],
+        "turn_index": combat["turn_index"],
+        "active": combat["combatants"][active_idx]["key"],
+        "order": order,
     }
 
 
@@ -303,14 +354,33 @@ def next_turn(ctx: CommandContext, **kwargs) -> CommandResult:
         actor["budget"] = _budget_for(ctx, actor, _base_speed(ctx, actor))
 
     ctx.store.update_combat(combatants=combatants, turn_index=idx, round=rnd)
-    snapshot = _combat_snapshot(
-        ctx, {"combatants": combatants, "round": rnd, "turn_index": idx}
+    snapshot = _turn_snapshot(
+        ctx, {"combatants": combatants, "round": rnd, "turn_index": idx}, idx
     )
-    digest = f"Round {rnd} — {actor['key']}'s turn"
+    # TVA-44: public initiative order — preview who is up next (by display
+    # name) so the player isn't left guessing; defeated combatants are
+    # never the "next" turn, so skip them the same way next_turn itself does.
+    next_actor = _next_living_after(combatants, idx)
+    digest = f"Round {rnd} — {actor['name']}'s turn"
+    if next_actor is not None:
+        digest += f" (next: {next_actor['name']})"
     return CommandResult(
-        ok=True, command="next_turn", digest=digest,
-        data={**snapshot, "kind": actor["kind"], "budget": actor["budget"]},
+        ok=True, command="next_turn", digest=digest, data=snapshot,
     )
+
+
+def _next_living_after(combatants: list[dict], idx: int) -> dict | None:
+    """The next non-defeated combatant after `idx`, wrapping around; `None`
+    if `idx` is the only living combatant left."""
+    n = len(combatants)
+    i = idx
+    for _ in range(n):
+        i = (i + 1) % n
+        if i == idx:
+            return None
+        if not combatants[i]["defeated"]:
+            return combatants[i]
+    return None
 
 
 def _active_combatant(combat: dict, key: str) -> dict | None:

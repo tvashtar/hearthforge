@@ -1,0 +1,38 @@
+# Hearthforge's local game engine MCP server.
+# Codex loads this project-scoped configuration when the repository is trusted.
+[mcp_servers.dm-engine]
+command = "uv"
+args = ["run", "dm", "mcp"]
+
+[mcp_servers.dm-engine.tools.open_campaign]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.advance_clock]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.create_campaign]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.create_location]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.create_npc]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.create_character]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.set_scene]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.lookup_rule]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.get_character_sheet]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.add_item]
+approval_mode = "approve"
+
+[mcp_servers.dm-engine.tools.dm_ruling]
+approval_mode = "approve"

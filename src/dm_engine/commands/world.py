@@ -5,6 +5,7 @@ from __future__ import annotations
 from dm_engine.commands.effects import expire_clock_effects
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.commands.registry import CommandContext, command
+from dm_engine.rules.bands import BAND_ORDER
 
 _QUEST_STATUSES = ("open", "active", "completed", "failed", "abandoned")
 
@@ -16,13 +17,55 @@ def set_scene(
     if location_slug is not None and ctx.store.get_location(location_slug) is None:
         return refuse("set_scene", f"unknown location {location_slug!r}")
 
+    # New scene, new furniture: props describe the *current* scene only.
+    cleared = ctx.store.clear_scene_props()
     fields: dict = {"scene": description}
     if location_slug is not None:
         fields["location_slug"] = location_slug
     ctx.store.update_world_clock(**fields)
+    suffix = f" ({cleared} props cleared)" if cleared else ""
     return CommandResult(
-        ok=True, command="set_scene", digest=f"Scene set: {description}",
-        data={"scene": description, "location_slug": location_slug},
+        ok=True, command="set_scene", digest=f"Scene set: {description}{suffix}",
+        data={"scene": description, "location_slug": location_slug,
+              "props_cleared": cleared},
+    )
+
+
+@command("add_scene_prop")
+def add_scene_prop(
+    ctx: CommandContext, name: str, band: str | None = None,
+    note: str | None = None, **kwargs,
+) -> CommandResult:
+    """Pin a narrative scene feature (a wagon, a cliff) into the scene
+    visualization. Upserts on name — call again to move or annotate it.
+    band=None means ambient (scene-wide). Player-visible by definition:
+    never put gm_only material in a prop."""
+    if band is not None and band not in BAND_ORDER:
+        return refuse(
+            "add_scene_prop",
+            f"unknown band {band!r} (valid bands: {', '.join(BAND_ORDER)})",
+        )
+    ctx.store.upsert_scene_prop(name, band, note)
+    where = f"({band})" if band else "(ambient)"
+    return CommandResult(
+        ok=True, command="add_scene_prop", digest=f"Prop: {name} {where}",
+        data={"name": name, "band": band, "note": note,
+              "props": ctx.store.scene_props()},
+    )
+
+
+@command("remove_scene_prop")
+def remove_scene_prop(ctx: CommandContext, name: str, **kwargs) -> CommandResult:
+    """Remove a pinned scene prop (destroyed, left behind, no longer
+    relevant)."""
+    if not ctx.store.remove_scene_prop(name):
+        known = ", ".join(p["name"] for p in ctx.store.scene_props()) or "none"
+        return refuse(
+            "remove_scene_prop", f"unknown prop {name!r} (known: {known})"
+        )
+    return CommandResult(
+        ok=True, command="remove_scene_prop", digest=f"Prop removed: {name}",
+        data={"name": name, "props": ctx.store.scene_props()},
     )
 
 

@@ -388,15 +388,23 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
         clusters = _band_layout([t for t in tokens if t.band == band])
         band_token_svgs: list[str] = []
         slot = 0
+        placed = 0
+        total = sum(len(c) for c in clusters)
         for cluster in clusters:
             # Word-wrap: a cluster that would straddle the row boundary
             # starts at column 0 of the next row instead, so linked pairs
-            # can only cross rows inside a cluster wider than one row.
+            # only cross rows inside a cluster wider than one row — but
+            # only while the padding keeps the band's whole tail (this
+            # cluster and everything after it) inside the two-row track
+            # budget. Otherwise pack dense; the gutter router exists
+            # precisely to keep the resulting cross-row links rect-free.
             # Padding is a function of band composition + engagement +
             # order only, so the no-jitter rule still holds.
             remaining = _PER_ROW - slot % _PER_ROW
-            if remaining < _PER_ROW and len(cluster) > remaining:
+            if (remaining < _PER_ROW and len(cluster) > remaining
+                    and slot + remaining + (total - placed) <= 2 * _PER_ROW):
                 slot += remaining
+            placed += len(cluster)
             for tok in cluster:
                 row, col = divmod(slot, _PER_ROW)
                 x = _LABEL_W + col * (_TOKEN_W + _TOKEN_GAP)
@@ -472,11 +480,12 @@ def _link_svg(frm: _Slot, to: _Slot, mutual: bool) -> str:
 
 def _arc_svg(frm: _Slot, to: _Slot, markers: str) -> str:
     """Quadratic arc from top-center to top-center. With equal endpoint y
-    the curve peaks (3 + 24)/2 = 13.5px above the rect tops, so it clears
-    every rect in its own row."""
+    the curve peaks (3 + 20)/2 = 11.5px above the rect tops — clear of
+    every rect in its own row, yet still inside the band track's top
+    border (row-0 tops sit 12px below it)."""
     ax_t, bx_t = frm.x + _TOKEN_W / 2, to.x + _TOKEN_W / 2
     mid_x = (ax_t + bx_t) / 2
-    peak = min(frm.y, to.y) - 24
+    peak = min(frm.y, to.y) - 20
     d = f"M {ax_t} {frm.y - 3} Q {mid_x} {peak} {bx_t} {to.y - 3}"
     return f'<path d="{d}" class="melee"{markers}/>'
 

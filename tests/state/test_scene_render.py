@@ -232,9 +232,12 @@ def test_cluster_of_three_arcs_over_the_row():
     rects = _token_positions(html).values()
     row_top = min(y for _, y in rects)
     assert y1 == y2 == row_top - 3   # endpoints just above the rects
-    assert cy < row_top              # control above too => whole curve above
+    assert cy == row_top - 20        # control above too => whole curve above
     assert not any(_inside_any_rect(p, rects)
                    for p in _link_sample_points(arcs[0]))
+    # ...and the whole curve stays inside the band track (NEAR top = 175),
+    # so the arc never nicks the track border.
+    assert min(y for _, y in _link_sample_points(arcs[0])) > 175
 
 
 def test_cluster_wraps_to_next_row_instead_of_straddling():
@@ -273,6 +276,31 @@ def test_giant_cluster_cross_row_links_avoid_all_rects():
     assert len({y for _, y in pos.values()}) == 2    # cluster spans two rows
     rects = list(pos.values())
     for link in links:
+        assert not any(_inside_any_rect(p, rects)
+                       for p in _link_sample_points(link)), link
+
+
+def test_three_clusters_of_three_stay_within_two_rows():
+    # 9 tokens as three 3-clusters: naive word-wrap padding would push the
+    # last cluster to a third row, below the band track. The padding is
+    # capped at the two-row budget, so a cluster falls back to dense
+    # packing (splitting across rows; the gutter router keeps its links
+    # rect-free) rather than overflow the track.
+    def cluster(i):
+        hub = f"h{i}"
+        return [
+            _token(hub, band="near", engaged=[f"m{i}a", f"m{i}b"]),
+            _token(f"m{i}a", band="near", engaged=[hub]),
+            _token(f"m{i}b", band="near", engaged=[hub]),
+        ]
+
+    view = _view([t for i in range(3) for t in cluster(i)])
+    html = render_scene_html(view)
+    pos = _token_positions(html)
+    assert len(pos) == 9
+    assert {y for _, y in pos.values()} == {187.0, 259.0}  # NEAR rows 0-1 only
+    rects = list(pos.values())
+    for link in _melee_links(html):
         assert not any(_inside_any_rect(p, rects)
                        for p in _link_sample_points(link)), link
 

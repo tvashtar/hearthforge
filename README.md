@@ -49,6 +49,12 @@ from the recap.
   `campaigns/<slug>/sheets/<you>.md` live-updates as you play, including
   your class features for your current level and per-spell tags (level,
   V/S/M components, ritual, concentration).
+- **Live scene view** — the engine renders `campaigns/<slug>/scene.html`
+  after every command: a combat band map (positions, engagements, party
+  HP, monster condition words — never their numbers) or an
+  out-of-combat scene card. Keep it open in a browser tab; it refreshes
+  itself. The DM pins scene furniture into it with
+  `add_scene_prop`/`remove_scene_prop`.
 - No permission prompts: `.mcp.json` wires up the engine and the committed
   project settings preapprove the gameplay tools.
 

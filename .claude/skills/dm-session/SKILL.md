@@ -32,6 +32,12 @@ and you narrate the results.
      `create_location` (upserts: to change an existing NPC's disposition or
      notes, call `create_npc` again with the same name — no ruling needed).
      `set_scene` persists the current scene whenever it changes.
+     Notable scene furniture the fiction establishes (an overturned
+     wagon, a cliff edge, a bonfire) → `add_scene_prop` (with its band)
+     in the same breath as narrating it, so the scene view shows what
+     the prose says; `remove_scene_prop` when it's destroyed or left
+     behind. Props are player-visible by definition — never put
+     `gm_only` material in one.
    - *Advancing the story* → `update_quest`. The party learning intel,
      naming a suspect, meeting an objective, uncovering a lead or
      complication, capturing someone, or resolving an encounter are all
@@ -204,6 +210,9 @@ companions IN FICTION — they are recruited through play, not spawned.
    its digest reads the rolled order aloud with display names ("Initiative:
    Kira (19) → Fen Scout (17) → Brother Aldric (3)"); announce it to the
    player in-fiction before the first turn.
+   Terrain that matters tactically (cover, hazards, the thing worth
+   fighting over) should already be pinned as scene props — the band map
+   the player is watching only shows what you pinned.
 2. Drive turns from what results already told you: `next_turn` returns the
    acting combatant, its budget, and the whole order with live HP,
    conditions, bands, and engagements — and every attack/move result
@@ -318,6 +327,11 @@ the shortfall or barter instead; never narrate a refused payment as paid.
 The engine materializes `campaigns/<slug>/sheets/<character>.md` after every
 command — tell the player to keep their sheet open in an editor; it live-
 updates. `dm sheet <name> --campaign <slug>` prints it on demand.
+
+The engine also materializes `campaigns/<slug>/scene.html` after every
+command — a live, self-refreshing scene view (combat band map in combat,
+scene card otherwise). At session start, alongside the sheet reminder,
+tell the player once to open it in a browser tab.
 
 The sheet is a reference, not just a display: it lists class features by
 level, every known spell with level/components/ritual/concentration, and

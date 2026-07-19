@@ -12,6 +12,7 @@ materializes it to campaigns/<slug>/scene.html.
 from __future__ import annotations
 
 import html as _html
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, model_validator
@@ -399,3 +400,12 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+def materialize_scene(store: CampaignStore) -> Path:
+    """The thin I/O adapter (registry post-command hook). A future live
+    web view replaces this file write with an HTTP response and reuses
+    build_scene_view/render_scene_html unchanged."""
+    path = store.root / "scene.html"
+    path.write_text(render_scene_html(build_scene_view(store)), encoding="utf-8")
+    return path

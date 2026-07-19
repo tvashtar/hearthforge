@@ -345,8 +345,10 @@ def test_death_save_marks_combatant_defeated_in_active_combat(ctx):
     ctx.store.update_combat(
         active=1,
         combatants=[
-            {"key": "Kira", "name": "Kira", "defeated": False},
-            {"key": "goblin-1", "name": "goblin-1"},
+            {"key": "Kira", "name": "Kira", "kind": "character", "character_id": kira["id"],
+             "band": "near", "engaged_with": [], "conditions": [], "defeated": False},
+            {"key": "goblin-1", "name": "goblin-1", "kind": "monster", "band": "near",
+             "engaged_with": [], "conditions": [], "hp": 7, "max_hp": 7, "defeated": False},
         ],
     )
     registry.execute("death_save", ctx, character="Kira", player_value=9)
@@ -356,7 +358,7 @@ def test_death_save_marks_combatant_defeated_in_active_combat(ctx):
     kira_entry = next(c for c in combatants if c["name"] == "Kira")
     assert kira_entry["defeated"] is True
     goblin_entry = next(c for c in combatants if c["name"] == "goblin-1")
-    assert "defeated" not in goblin_entry
+    assert goblin_entry["defeated"] is False  # death_save never touches other combatants
 
 
 def test_death_save_critical_failure_counts_two(ctx):

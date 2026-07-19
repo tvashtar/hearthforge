@@ -17,7 +17,7 @@ from pathlib import Path
 from dm_engine.commands.envelope import CommandResult, refuse
 from dm_engine.content.lookup import RulesDB
 from dm_engine.rules.dice import Roll, SeededDiceRoller
-from dm_engine.state import sheets
+from dm_engine.state import scene, sheets
 from dm_engine.state.migrate import normalize_characters
 from dm_engine.state.store import CampaignStore
 
@@ -112,6 +112,7 @@ def execute(name: str, ctx: CommandContext, /, **kwargs) -> CommandResult:
             ctx.store.set_rng_state(json.dumps(ctx.roller.getstate()))
             if result.ok:
                 sheets.write_party_sheets(ctx.store, ctx.rules)
+                scene.materialize_scene(ctx.store)
     except Exception as exc:
         # The rollback just erased this command's event row along with its
         # state mutations, leaving a hole in the append-only audit log

@@ -173,15 +173,29 @@ def _build_combat_view(store: CampaignStore, combat: dict) -> CombatView:
 # (no timestamps, no randomness, iteration in model/list order only).
 
 _TOKEN_W, _TOKEN_H = 150, 64
-_TOKEN_GAP = 12
+_TOKEN_GAP = 28
 _PER_ROW = 5
 _BAND_H = 170            # fits two token rows + a prop line
 _LABEL_W = 90
 _SVG_W = _LABEL_W + _PER_ROW * (_TOKEN_W + _TOKEN_GAP) + 20
 
+# Small self-contained arrowheads for engagement links. userSpaceOnUse keeps
+# them a fixed size (independent of stroke-width) so geometry stays exact;
+# fill matches the link stroke so mutual/one-way arrows read as one mark.
+_ARROW_DEFS = (
+    "<defs>"
+    '<marker id="ah-end" markerWidth="7" markerHeight="7" refX="6" refY="3.5"'
+    ' orient="auto" markerUnits="userSpaceOnUse">'
+    '<path d="M0,0 L7,3.5 L0,7 Z" fill="#d8d4c8"/></marker>'
+    '<marker id="ah-start" markerWidth="7" markerHeight="7" refX="1" refY="3.5"'
+    ' orient="auto" markerUnits="userSpaceOnUse">'
+    '<path d="M7,0 L0,3.5 L7,7 Z" fill="#d8d4c8"/></marker>'
+    "</defs>"
+)
+
 _CSS = """
 body { background: #16181d; color: #d8d4c8; font: 14px/1.45 -apple-system,
-       "Segoe UI", sans-serif; margin: 1.2rem auto; max-width: 940px; }
+       "Segoe UI", sans-serif; margin: 1.2rem auto; max-width: 1020px; }
 header { font-size: 1.05rem; letter-spacing: .04em; margin-bottom: .6rem;
          color: #e8e3d3; }
 footer { margin-top: .8rem; color: #6f6a5e; font-size: .8rem; }
@@ -206,8 +220,7 @@ svg .name { fill: #f0ece0; font: 700 13px sans-serif; }
 svg .sub { fill: #d8d4c8; font: 11px sans-serif; }
 svg .hpback { fill: #14161a; }
 svg .hpfill { fill: #79a56a; }
-svg .melee { stroke: #d8d4c8; stroke-width: 1.5; stroke-dasharray: 4 3; }
-svg .swords { fill: #e0a626; font-size: 13px; }
+svg .melee { stroke: #d8d4c8; stroke-width: 1.5; fill: none; }
 svg .prop { fill: #b0a274; font: italic 12px sans-serif; }
 .card { background: #1d2027; border: 1px solid #2a2e37; border-radius: 10px;
         padding: 1rem 1.2rem; }
@@ -346,7 +359,8 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
     parts = [
         f'<svg width="{_SVG_W}" height="{height}"'
         f' viewBox="0 0 {_SVG_W} {height}" xmlns="http://www.w3.org/2000/svg"'
-        ' role="img">'
+        ' role="img">',
+        _ARROW_DEFS,
     ]
     positions: dict[str, tuple[float, float]] = {}
     for i, band in enumerate(BAND_ORDER):
@@ -379,27 +393,49 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
                 f"◆ {_html.escape(prop.name)}</text>"
             )
 
-    links = sorted({
+    # Each unordered engaged pair renders exactly once, in sorted key order
+    # (determinism). A pair is MUTUAL when each token lists the other, else
+    # ONE-WAY from the engager toward the target; the path always runs
+    # engager -> target so the single arrowhead points at the target.
+    tok_by_key = {tok.key: tok for tok in tokens}
+    pairs = sorted({
         tuple(sorted((tok.key, partner)))
         for tok in tokens
         for partner in tok.engaged_with
         if tok.key in positions and partner in positions
     })
-    for a, b in links:
-        ax, ay = positions[a]
-        bx, by = positions[b]
-        ax_c, ay_c = ax + _TOKEN_W / 2, ay + _TOKEN_H / 2
-        bx_c, by_c = bx + _TOKEN_W / 2, by + _TOKEN_H / 2
-        parts.append(
-            f'<line x1="{ax_c}" y1="{ay_c}" x2="{bx_c}" y2="{by_c}" class="melee"/>'
-        )
-        mx, my = (ax_c + bx_c) / 2, (ay_c + by_c) / 2
-        parts.append(
-            f'<text x="{mx}" y="{my}" class="swords" text-anchor="middle">⚔</text>'
-        )
+    for ka, kb in pairs:
+        a_lists_b = kb in tok_by_key[ka].engaged_with
+        b_lists_a = ka in tok_by_key[kb].engaged_with
+        mutual = a_lists_b and b_lists_a
+        frm, to = (ka, kb) if (mutual or a_lists_b) else (kb, ka)
+        parts.append(_link_svg(positions[frm], positions[to], mutual))
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+def _link_svg(frm: tuple[float, float], to: tuple[float, float], mutual: bool) -> str:
+    """A single engagement link. Endpoints always sit just OUTSIDE both token
+    rects so the line/arrowheads never cross a rect: adjacent same-row slots
+    join straight across the gap, everything else arcs over the tops."""
+    fx, fy = frm
+    tx, ty = to
+    markers = ' marker-end="url(#ah-end)"'
+    if mutual:
+        markers = ' marker-start="url(#ah-start)" marker-end="url(#ah-end)"'
+    if fy == ty and abs(fx - tx) == _TOKEN_W + _TOKEN_GAP:
+        cy = fy + _TOKEN_H / 2
+        if fx < tx:
+            x1, x2 = fx + _TOKEN_W + 3, tx - 3
+        else:
+            x1, x2 = fx - 3, tx + _TOKEN_W + 3
+        return f'<line x1="{x1}" y1="{cy}" x2="{x2}" y2="{cy}" class="melee"{markers}/>'
+    ax_t, bx_t = fx + _TOKEN_W / 2, tx + _TOKEN_W / 2
+    mid_x = (ax_t + bx_t) / 2
+    peak = min(fy, ty) - 24
+    d = f"M {ax_t} {fy - 3} Q {mid_x} {peak} {bx_t} {ty - 3}"
+    return f'<path d="{d}" class="melee"{markers}/>'
 
 
 def materialize_scene(store: CampaignStore) -> Path:

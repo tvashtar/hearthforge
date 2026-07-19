@@ -3,6 +3,8 @@ faithful — engaged pairs render in their shared band track, tokens don't
 move unless band/engagement changes, and nothing numeric about monsters
 survives into the page."""
 
+import re
+
 from dm_engine.state.scene import (
     CombatView,
     InitiativeEntry,
@@ -12,6 +14,23 @@ from dm_engine.state.scene import (
     TokenView,
     render_scene_html,
 )
+
+
+def _melee_links(html: str) -> list[str]:
+    """Every <line>/<path class="melee" .../> element in the rendered SVG."""
+    return re.findall(r'<(?:line|path)[^>]*class="melee"[^>]*/>', html)
+
+
+def _line_xs(link: str) -> tuple[float, float]:
+    """The (from, to) x-coordinates of a straight melee <line> link."""
+    x1 = float(re.search(r'x1="([\d.]+)"', link).group(1))
+    x2 = float(re.search(r'x2="([\d.]+)"', link).group(1))
+    return x1, x2
+
+
+def _token_rect_xs(html: str) -> list[float]:
+    """Left x of every token rect (the ones carrying rx=8 rounding)."""
+    return [float(x) for x in re.findall(r'<rect x="([\d.]+)" y="[\d.]+" rx', html)]
 
 
 def _token(key, kind="monster", band="near", *, name=None, engaged=(),
@@ -77,6 +96,67 @@ def test_engaged_pair_at_far_renders_in_far_track_with_link():
     assert "Aldric" in far_track and "goblin-1" in far_track
     assert 'class="melee"' in html  # exactly the one link
     assert html.count('class="melee"') == 1
+
+
+def test_mutual_pair_link_is_double_headed():
+    view = _view([
+        _token("Kira", kind="character", band="engaged", hp=11, max_hp=12,
+               engaged=["goblin-1"], active=True),
+        _token("goblin-1", band="engaged", engaged=["Kira"]),
+    ])
+    html = render_scene_html(view)
+    assert html.count('class="melee"') == 1
+    link = _melee_links(html)[0]
+    assert 'marker-start="url(#ah-start)"' in link
+    assert 'marker-end="url(#ah-end)"' in link
+
+
+def test_asymmetric_pair_is_single_headed_running_engager_to_target():
+    # a lists b, but b does not list a -> one-way link a -> b.
+    a = TokenView(
+        key="Kira", name="Kira", kind="character", band="engaged",
+        engaged_with=["goblin-1"], conditions=[], defeated=False, active=True,
+        hp=11, max_hp=12,
+    )
+    b = TokenView(
+        key="goblin-1", name="goblin-1", kind="monster", band="engaged",
+        engaged_with=[], conditions=[], defeated=False, active=False,
+        condition_word="fresh",
+    )
+    html = render_scene_html(_view([a, b]))
+    link = _melee_links(html)[0]
+    assert 'marker-end="url(#ah-end)"' in link
+    assert "marker-start" not in link
+    # Path runs engager (Kira, left slot) -> target (goblin-1, right slot):
+    # the "from" x precedes the "to" x.
+    x1, x2 = _line_xs(link)
+    assert x1 < x2
+
+
+def test_adjacent_link_endpoints_sit_outside_both_rects():
+    view = _view([
+        _token("Kira", kind="character", band="engaged", hp=11, max_hp=12,
+               engaged=["goblin-1"], active=True),
+        _token("goblin-1", band="engaged", engaged=["Kira"]),
+    ])
+    html = render_scene_html(view)
+    rects = _token_rect_xs(html)
+    left_x, right_x = sorted(rects)
+    left_right_edge = left_x + 150   # _TOKEN_W
+    right_left_edge = right_x
+    for x in _line_xs(_melee_links(html)[0]):
+        assert left_right_edge < x < right_left_edge
+
+
+def test_combat_output_drops_swords_glyph():
+    view = _view([
+        _token("Kira", kind="character", band="engaged", hp=11, max_hp=12,
+               engaged=["goblin-1"], active=True),
+        _token("goblin-1", band="engaged", engaged=["Kira"]),
+    ])
+    html = render_scene_html(view)
+    assert "⚔" not in html
+    assert 'class="swords"' not in html
 
 
 def test_monster_shows_word_never_numbers():

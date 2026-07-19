@@ -598,6 +598,7 @@ def get_scene_state(ctx: CommandContext, **kwargs) -> CommandResult:
             "location": location,
             "scene": clock.get("scene"),
             "npcs_present": npcs_present,
+            "props": ctx.store.scene_props(),
             "combat": combat_payload,
         },
     )

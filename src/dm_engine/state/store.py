@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS active_effects (
 );
 """
 
+# IF NOT EXISTS for the same reason as ACTIVE_EFFECTS_TABLE: doubles as the
+# in-place migration for campaigns created before scene visualization.
+SCENE_PROPS_TABLE = """
+CREATE TABLE IF NOT EXISTS scene_props (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    band TEXT CHECK (band IN ('engaged','near','far','distant')),
+    note TEXT
+);
+"""
+
 SCHEMA = """
 CREATE TABLE campaign (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -137,7 +148,7 @@ CREATE TABLE event_log (
     is_ruling INTEGER NOT NULL DEFAULT 0,
     rationale TEXT
 );
-""" + ACTIVE_EFFECTS_TABLE
+""" + ACTIVE_EFFECTS_TABLE + SCENE_PROPS_TABLE
 
 _JSON_CHARACTER_FIELDS = {"abilities", "proficiencies", "attacks", "spells_known"}
 _JSON_RESOURCE_FIELDS = {"spell_slots", "conditions", "death_saves", "concentration"}
@@ -152,7 +163,7 @@ class CampaignStore:
         # In-place migration for campaigns created before TVA-20 (no-op
         # otherwise); executescript commits, so it runs before any command
         # transaction is open.
-        conn.executescript(ACTIVE_EFFECTS_TABLE)
+        conn.executescript(ACTIVE_EFFECTS_TABLE + SCENE_PROPS_TABLE)
 
     # -- lifecycle -----------------------------------------------------
 
@@ -525,6 +536,28 @@ class CampaignStore:
             f"SELECT * FROM quests WHERE status IN ({marks}) ORDER BY slug", statuses
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # -- scene props -------------------------------------------------------
+
+    def upsert_scene_prop(self, name: str, band: str | None, note: str | None) -> None:
+        self.conn.execute(
+            "INSERT INTO scene_props (name, band, note) VALUES (?, ?, ?)"
+            " ON CONFLICT(name) DO UPDATE SET band = excluded.band,"
+            " note = excluded.note",
+            (name, band, note),
+        )
+
+    def remove_scene_prop(self, name: str) -> bool:
+        cur = self.conn.execute("DELETE FROM scene_props WHERE name = ?", (name,))
+        return cur.rowcount > 0
+
+    def scene_props(self) -> list[dict]:
+        rows = self.conn.execute("SELECT * FROM scene_props ORDER BY id").fetchall()
+        return [dict(r) for r in rows]
+
+    def clear_scene_props(self) -> int:
+        cur = self.conn.execute("DELETE FROM scene_props")
+        return cur.rowcount
 
     # -- combat ------------------------------------------------------------
 

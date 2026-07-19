@@ -8,9 +8,11 @@ The engine persists to two kinds of SQLite database (FC-5):
 | **Rules DB** | `data/build/rules.sqlite` | `dm seed` only | static, rebuilt from vendored SRD sources, gitignored |
 
 Alongside each campaign store: `sheets/` (rendered markdown character
-sheets, re-materialized after every successful command) and `snapshots/`
-(full copies of `campaign.sqlite` taken automatically every time the
-campaign is opened, named `<ISO-timestamp>.sqlite`).
+sheets, re-materialized after every successful command), `scene.html`
+(rendered scene visualization, re-materialized after every successful
+command), and `snapshots/` (full copies of `campaign.sqlite` taken
+automatically every time the campaign is opened, named
+`<ISO-timestamp>.sqlite`).
 
 Schema sources of truth: `src/dm_engine/state/store.py` (campaign) and
 `src/dm_engine/content/seed.py` (rules). This document describes; those
@@ -107,6 +109,20 @@ player-visible by construction; the dm-session skill handles secrecy).
 `npcs.name` is UNIQUE and `create_npc` upserts on it. `locations.slug` and
 `quests.slug` are primary keys; `quests.status` is one of
 `open/active/completed/failed/abandoned`.
+
+### `scene_props` — pinned scene furniture
+
+Narrative props the DM pins into the scene visualization
+(`add_scene_prop` / `remove_scene_prop`; `set_scene` clears the table —
+new scene, new furniture). Rendered into `campaigns/<slug>/scene.html`
+and reported by `get_scene_state`. (`CREATE TABLE IF NOT EXISTS` runs on
+every store open, migrating older campaigns in place.)
+
+| Column | Notes |
+|---|---|
+| `name` | display text, UNIQUE — upsert key (`"overturned wagon"`) |
+| `band` | `engaged/near/far/distant`, or NULL for ambient (scene-wide) |
+| `note` | optional free text shown as a subtitle |
 
 ### `world_clock` — in-game time and scene (singleton)
 

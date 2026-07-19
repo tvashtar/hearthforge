@@ -543,8 +543,10 @@ def test_ruling_revive_op_full_transition(ctx, party):
         active=1,
         combatants=[
             {"key": "Kira", "name": "Kira", "kind": "character",
-             "character_id": kira["id"], "defeated": True},
-            {"key": "goblin-1", "name": "goblin-1", "kind": "monster"},
+             "character_id": kira["id"], "band": "near", "engaged_with": [],
+             "conditions": [], "defeated": True},
+            {"key": "goblin-1", "name": "goblin-1", "kind": "monster", "band": "near",
+             "engaged_with": [], "conditions": [], "hp": 7, "max_hp": 7, "defeated": False},
         ],
     )
     ctx.store.conn.commit()

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import html as _html
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from pydantic import BaseModel, model_validator
 
@@ -302,10 +302,23 @@ def _render_combat(view: SceneView) -> str:
     )
 
 
-def _band_layout(tokens: list[TokenView]) -> list[TokenView]:
+class _Slot(NamedTuple):
+    """A token's laid-out position: pixel origin plus the grid facts the
+    link router needs to route around other rects."""
+    x: float
+    y: float
+    band_i: int
+    row: int
+    col: int
+    y0: float  # band track top
+
+
+def _band_layout(tokens: list[TokenView]) -> list[list[TokenView]]:
     """Engaged clusters adjacent, then initiative order (input order IS
     initiative order). A token's slot changes only when its band or its
-    engagement set changes — the no-jitter rule."""
+    engagement set changes — the no-jitter rule. Returns the clusters so
+    the slot assigner can word-wrap each onto a fresh row when it would
+    otherwise straddle a row boundary."""
     clusters: list[list[TokenView]] = []
     home_of: dict[str, list[TokenView]] = {}
     for tok in tokens:
@@ -319,7 +332,7 @@ def _band_layout(tokens: list[TokenView]) -> list[TokenView]:
             clusters.append(home)
         home.append(tok)
         home_of[tok.key] = home
-    return [t for cluster in clusters for t in cluster]
+    return clusters
 
 
 def _token_svg(tok: TokenView, x: float, y: float) -> str:
@@ -362,7 +375,7 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
         ' role="img">',
         _ARROW_DEFS,
     ]
-    positions: dict[str, tuple[float, float]] = {}
+    positions: dict[str, _Slot] = {}
     for i, band in enumerate(BAND_ORDER):
         y0 = 5 + i * _BAND_H
         parts.append(
@@ -372,14 +385,25 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
         parts.append(
             f'<text x="14" y="{y0 + 22}" class="bandlabel">{band.upper()}</text>'
         )
-        laid_out = _band_layout([t for t in tokens if t.band == band])
+        clusters = _band_layout([t for t in tokens if t.band == band])
         band_token_svgs: list[str] = []
-        for slot, tok in enumerate(laid_out):
-            row, col = divmod(slot, _PER_ROW)
-            x = _LABEL_W + col * (_TOKEN_W + _TOKEN_GAP)
-            y = y0 + 12 + row * (_TOKEN_H + 8)
-            positions[tok.key] = (x, y)
-            band_token_svgs.append(_token_svg(tok, x, y))
+        slot = 0
+        for cluster in clusters:
+            # Word-wrap: a cluster that would straddle the row boundary
+            # starts at column 0 of the next row instead, so linked pairs
+            # can only cross rows inside a cluster wider than one row.
+            # Padding is a function of band composition + engagement +
+            # order only, so the no-jitter rule still holds.
+            remaining = _PER_ROW - slot % _PER_ROW
+            if remaining < _PER_ROW and len(cluster) > remaining:
+                slot += remaining
+            for tok in cluster:
+                row, col = divmod(slot, _PER_ROW)
+                x = _LABEL_W + col * (_TOKEN_W + _TOKEN_GAP)
+                y = y0 + 12 + row * (_TOKEN_H + 8)
+                positions[tok.key] = _Slot(x, y, i, row, col, y0)
+                band_token_svgs.append(_token_svg(tok, x, y))
+                slot += 1
         # Tokens render inside their own band track (between this band's
         # label and the next), so each token's markup sits in the region a
         # reader would look for it. Engagement links are appended last, after
@@ -415,27 +439,82 @@ def _render_band_svg(tokens: list[TokenView], band_props: list[PropView]) -> str
     return "".join(parts)
 
 
-def _link_svg(frm: tuple[float, float], to: tuple[float, float], mutual: bool) -> str:
-    """A single engagement link. Endpoints always sit just OUTSIDE both token
-    rects so the line/arrowheads never cross a rect: adjacent same-row slots
-    join straight across the gap, everything else arcs over the tops."""
-    fx, fy = frm
-    tx, ty = to
+def _link_svg(frm: _Slot, to: _Slot, mutual: bool) -> str:
+    """A single engagement link, path running frm -> to. Every route keeps
+    the whole stroke OUTSIDE all token rects:
+
+    - same row, adjacent columns: straight horizontal across the gap;
+    - same row 0, non-adjacent: quadratic arc over the tops (equal-y
+      endpoints keep the whole curve above the row's rects);
+    - anything else in the same band (cross-row inside a wrapped cluster,
+      or non-adjacent on row >= 1 where an arc would sag into the row
+      above): orthogonal route through the rect-free column gutters and,
+      when the columns don't share a gutter, the strip above row 0;
+    - different bands (unreachable today — engage adopts the target's
+      band): the arc, as a harmless fallback."""
     markers = ' marker-end="url(#ah-end)"'
     if mutual:
         markers = ' marker-start="url(#ah-start)" marker-end="url(#ah-end)"'
-    if fy == ty and abs(fx - tx) == _TOKEN_W + _TOKEN_GAP:
-        cy = fy + _TOKEN_H / 2
-        if fx < tx:
-            x1, x2 = fx + _TOKEN_W + 3, tx - 3
+    same_row = frm.band_i == to.band_i and frm.row == to.row
+    if same_row and abs(frm.col - to.col) == 1:
+        cy = frm.y + _TOKEN_H / 2
+        if frm.x < to.x:
+            x1, x2 = frm.x + _TOKEN_W + 3, to.x - 3
         else:
-            x1, x2 = fx - 3, tx + _TOKEN_W + 3
+            x1, x2 = frm.x - 3, to.x + _TOKEN_W + 3
         return f'<line x1="{x1}" y1="{cy}" x2="{x2}" y2="{cy}" class="melee"{markers}/>'
-    ax_t, bx_t = fx + _TOKEN_W / 2, tx + _TOKEN_W / 2
-    mid_x = (ax_t + bx_t) / 2
-    peak = min(fy, ty) - 24
-    d = f"M {ax_t} {fy - 3} Q {mid_x} {peak} {bx_t} {ty - 3}"
+    if (same_row and frm.row == 0) or frm.band_i != to.band_i:
+        return _arc_svg(frm, to, markers)
+    pts = _gutter_route(frm, to)
+    d = "M " + " L ".join(f"{x} {y}" for x, y in pts)
     return f'<path d="{d}" class="melee"{markers}/>'
+
+
+def _arc_svg(frm: _Slot, to: _Slot, markers: str) -> str:
+    """Quadratic arc from top-center to top-center. With equal endpoint y
+    the curve peaks (3 + 24)/2 = 13.5px above the rect tops, so it clears
+    every rect in its own row."""
+    ax_t, bx_t = frm.x + _TOKEN_W / 2, to.x + _TOKEN_W / 2
+    mid_x = (ax_t + bx_t) / 2
+    peak = min(frm.y, to.y) - 24
+    d = f"M {ax_t} {frm.y - 3} Q {mid_x} {peak} {bx_t} {to.y - 3}"
+    return f'<path d="{d}" class="melee"{markers}/>'
+
+
+def _gutter_route(frm: _Slot, to: _Slot) -> list[tuple[float, float]]:
+    """Orthogonal waypoints frm -> to that never enter a token rect: the
+    28px vertical gutters between columns are rect-free in every row, and
+    the 6px strip above row 0 (y0+6) is rect-free across the band. The
+    only horizontal runs at token height are the 11px stubs between a
+    rect's side edge and its own adjacent gutter, which cross nothing."""
+    pitch = _TOKEN_W + _TOKEN_GAP
+
+    def gutter_x(g: int) -> float:
+        # Gutter g is the channel left of column g (g = _PER_ROW: right
+        # of the last column); its center is 14px off the rect edges.
+        return _LABEL_W + g * pitch - _TOKEN_GAP / 2
+
+    def pick_gutter(col: int, toward: int) -> int:
+        # The gutter adjacent to `col` on the side facing `toward`
+        # (right on ties) — always reachable by an 11px stub.
+        return col + 1 if toward >= col else col
+
+    def stub_x(slot: _Slot, g: int) -> float:
+        # Exit/entry point 3px outside the rect edge facing gutter g.
+        if gutter_x(g) > slot.x + _TOKEN_W / 2:
+            return slot.x + _TOKEN_W + 3
+        return slot.x - 3
+
+    g_frm = pick_gutter(frm.col, to.col)
+    g_to = pick_gutter(to.col, frm.col)
+    frm_cy = frm.y + _TOKEN_H / 2
+    to_cy = to.y + _TOKEN_H / 2
+    pts = [(stub_x(frm, g_frm), frm_cy), (gutter_x(g_frm), frm_cy)]
+    if g_frm != g_to:
+        top = frm.y0 + 6
+        pts += [(gutter_x(g_frm), top), (gutter_x(g_to), top)]
+    pts += [(gutter_x(g_to), to_cy), (stub_x(to, g_to), to_cy)]
+    return pts
 
 
 def materialize_scene(store: CampaignStore) -> Path:

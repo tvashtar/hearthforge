@@ -33,6 +33,57 @@ def _token_rect_xs(html: str) -> list[float]:
     return [float(x) for x in re.findall(r'<rect x="([\d.]+)" y="[\d.]+" rx', html)]
 
 
+def _token_positions(html: str) -> dict[str, tuple[float, float]]:
+    """Token name -> its rect's top-left (x, y)."""
+    pat = re.compile(
+        r'<rect x="([\d.]+)" y="([\d.]+)" rx="8"[^/]*/>'
+        r'<text [^>]*class="name">([^<]+)</text>'
+    )
+    return {name: (float(x), float(y)) for x, y, name in pat.findall(html)}
+
+
+def _link_sample_points(link: str, n: int = 64) -> list[tuple[float, float]]:
+    """Dense point samples along a melee link (line, polyline path, or
+    quadratic path) for rect-intersection checks."""
+    ts = [i / n for i in range(n + 1)]
+    if link.startswith("<line"):
+        x1, x2 = _line_xs(link)
+        y1 = float(re.search(r'y1="([\d.-]+)"', link).group(1))
+        y2 = float(re.search(r'y2="([\d.-]+)"', link).group(1))
+        return [(x1 + (x2 - x1) * t, y1 + (y2 - y1) * t) for t in ts]
+    d = re.search(r'd="([^"]+)"', link).group(1)
+    pts: list[tuple[float, float]] = []
+    cur: tuple[float, float] | None = None
+    for cmd, coords in re.findall(r"([MLQ])((?:\s+-?[\d.]+)+)", d):
+        vals = [float(v) for v in coords.split()]
+        if cmd == "M":
+            cur = (vals[0], vals[1])
+            pts.append(cur)
+        elif cmd == "L":
+            nxt = (vals[0], vals[1])
+            pts += [
+                (cur[0] + (nxt[0] - cur[0]) * t, cur[1] + (nxt[1] - cur[1]) * t)
+                for t in ts
+            ]
+            cur = nxt
+        else:  # Q cx cy x y
+            cx, cy, x, y = vals
+            pts += [
+                (
+                    (1 - t) ** 2 * cur[0] + 2 * t * (1 - t) * cx + t**2 * x,
+                    (1 - t) ** 2 * cur[1] + 2 * t * (1 - t) * cy + t**2 * y,
+                )
+                for t in ts
+            ]
+            cur = (x, y)
+    return pts
+
+
+def _inside_any_rect(pt, rects, w=150.0, h=64.0):
+    px, py = pt
+    return any(rx < px < rx + w and ry < py < ry + h for rx, ry in rects)
+
+
 def _token(key, kind="monster", band="near", *, name=None, engaged=(),
            active=False, defeated=False, conditions=(), hp=None, max_hp=None,
            word=None):
@@ -157,6 +208,73 @@ def test_combat_output_drops_swords_glyph():
     html = render_scene_html(view)
     assert "⚔" not in html
     assert 'class="swords"' not in html
+
+
+def test_cluster_of_three_arcs_over_the_row():
+    # Kira engaged with both goblins: goblin-1 sits adjacent (straight
+    # link), goblin-2 one slot further (arc). The arc must stay above the
+    # row's rect tops for its whole length — never through a rect.
+    view = _view([
+        _token("Kira", kind="character", band="near", hp=10, max_hp=10,
+               engaged=["goblin-1", "goblin-2"], active=True),
+        _token("goblin-1", band="near", engaged=["Kira"]),
+        _token("goblin-2", band="near", engaged=["Kira"]),
+    ])
+    html = render_scene_html(view)
+    links = _melee_links(html)
+    assert len(links) == 2
+    arcs = [ln for ln in links if ln.startswith("<path")]
+    assert len(arcs) == 1
+    d = re.search(r'd="([^"]+)"', arcs[0]).group(1)
+    m = re.fullmatch(
+        r"M ([\d.-]+) ([\d.-]+) Q ([\d.-]+) ([\d.-]+) ([\d.-]+) ([\d.-]+)", d)
+    _x1, y1, _cx, cy, _x2, y2 = (float(v) for v in m.groups())
+    rects = _token_positions(html).values()
+    row_top = min(y for _, y in rects)
+    assert y1 == y2 == row_top - 3   # endpoints just above the rects
+    assert cy < row_top              # control above too => whole curve above
+    assert not any(_inside_any_rect(p, rects)
+                   for p in _link_sample_points(arcs[0]))
+
+
+def test_cluster_wraps_to_next_row_instead_of_straddling():
+    # Four singletons fill row-0 columns 0..3; a mutual pair no longer
+    # fits on that row, so it word-wraps to row 1 columns 0 and 1 together
+    # and keeps the straight adjacent link.
+    singles = [_token(f"g{i}", band="near") for i in range(1, 5)]
+    pair = [
+        _token("Kira", kind="character", band="near", hp=9, max_hp=9,
+               engaged=["wolf-1"], active=True),
+        _token("wolf-1", band="near", engaged=["Kira"]),
+    ]
+    html = render_scene_html(_view(singles + pair))
+    pos = _token_positions(html)
+    assert pos["Kira"][1] == pos["wolf-1"][1]        # same row
+    assert pos["Kira"][1] > pos["g1"][1]             # ...the next one down
+    assert (pos["Kira"][0], pos["wolf-1"][0]) == (90.0, 268.0)  # cols 0, 1
+    link = _melee_links(html)[0]
+    assert link.startswith("<line")
+
+
+def test_giant_cluster_cross_row_links_avoid_all_rects():
+    # One token mutually engaged with five others: the cluster spans two
+    # rows, so one link must cross rows. Every emitted link — straight,
+    # arc, or gutter-routed — must avoid every token rect.
+    others = [f"goblin-{i}" for i in range(1, 6)]
+    view = _view([
+        _token("Kira", kind="character", band="near", hp=9, max_hp=9,
+               engaged=list(others), active=True),
+        *[_token(k, band="near", engaged=["Kira"]) for k in others],
+    ])
+    html = render_scene_html(view)
+    links = _melee_links(html)
+    assert len(links) == 5
+    pos = _token_positions(html)
+    assert len({y for _, y in pos.values()}) == 2    # cluster spans two rows
+    rects = list(pos.values())
+    for link in links:
+        assert not any(_inside_any_rect(p, rects)
+                       for p in _link_sample_points(link)), link
 
 
 def test_monster_shows_word_never_numbers():
